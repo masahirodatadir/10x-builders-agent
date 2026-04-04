@@ -4,5 +4,6 @@ dist/
 .turbo/
 .env
 .env.local
-.env.*.local
 *.tsbuildinfo
+.temp/
+.branches/
