@@ -161,7 +161,7 @@ export async function POST(request: Request) {
   if (command === "/start") {
     await sendTelegramMessage(
       chatId,
-      "¡Hola! Soy tu agente personal.\n\nSi ya tienes cuenta web, ve a Ajustes → Telegram en la web, genera un código de vinculación y envíamelo así:\n/link TU_CODIGO"
+      "¡Hola! Soy tu agente personal.\n\nComandos disponibles:\n/link <codigo> - Vincular tu cuenta web\n/sessions - Ver tus sesiones\n/new - Crear nueva sesion\n/switch <numero> - Cambiar de sesion\n/clear - Limpiar la sesion actual"
     );
     return NextResponse.json({ ok: true });
   }
@@ -224,13 +224,120 @@ export async function POST(request: Request) {
 
   const userId = telegramAccount.user_id;
 
+  // --- Session management commands ---
+
+  if (command === "/sessions") {
+    const { data: userSessions } = await db
+      .from("agent_sessions")
+      .select("*")
+      .eq("user_id", userId)
+      .eq("channel", "telegram")
+      .eq("status", "active")
+      .order("last_used_at", { ascending: false });
+
+    if (!userSessions || userSessions.length === 0) {
+      await sendTelegramMessage(chatId, "No tienes sesiones. Usa /new para crear una.");
+      return NextResponse.json({ ok: true });
+    }
+
+    const lines = userSessions.map((s: Record<string, unknown>, i: number) => {
+      const date = new Date(s.created_at as string).toLocaleDateString("es");
+      const marker = i === 0 ? " (actual)" : "";
+      return `${i + 1}. ${date}${marker}`;
+    });
+
+    await sendTelegramMessage(
+      chatId,
+      `Tus sesiones:\n${lines.join("\n")}\n\nUsa /switch <numero> para cambiar.`
+    );
+    return NextResponse.json({ ok: true });
+  }
+
+  if (command === "/new") {
+    const { data: newSession } = await db
+      .from("agent_sessions")
+      .insert({
+        user_id: userId,
+        channel: "telegram",
+        status: "active",
+        budget_tokens_used: 0,
+        budget_tokens_limit: 100000,
+        last_used_at: new Date().toISOString(),
+      })
+      .select()
+      .single();
+
+    if (!newSession) {
+      await sendTelegramMessage(chatId, "Error creando sesion.");
+      return NextResponse.json({ ok: true });
+    }
+
+    await sendTelegramMessage(chatId, "Nueva sesion creada. Ya puedes chatear.");
+    return NextResponse.json({ ok: true });
+  }
+
+  if (command === "/switch") {
+    const num = parseInt(args, 10);
+    if (isNaN(num) || num < 1) {
+      await sendTelegramMessage(chatId, "Indica un numero valido. Ejemplo: /switch 2");
+      return NextResponse.json({ ok: true });
+    }
+
+    const { data: userSessions } = await db
+      .from("agent_sessions")
+      .select("*")
+      .eq("user_id", userId)
+      .eq("channel", "telegram")
+      .eq("status", "active")
+      .order("last_used_at", { ascending: false });
+
+    if (!userSessions || num > userSessions.length) {
+      await sendTelegramMessage(chatId, `No existe la sesion ${num}. Usa /sessions para ver la lista.`);
+      return NextResponse.json({ ok: true });
+    }
+
+    const target = userSessions[num - 1];
+    await db
+      .from("agent_sessions")
+      .update({ last_used_at: new Date().toISOString() })
+      .eq("id", target.id);
+
+    await sendTelegramMessage(chatId, `Cambiado a sesion ${num}.`);
+    return NextResponse.json({ ok: true });
+  }
+
+  if (command === "/clear") {
+    const { data: currentSession } = await db
+      .from("agent_sessions")
+      .select("*")
+      .eq("user_id", userId)
+      .eq("channel", "telegram")
+      .eq("status", "active")
+      .order("last_used_at", { ascending: false })
+      .limit(1)
+      .single();
+
+    if (!currentSession) {
+      await sendTelegramMessage(chatId, "No tienes una sesion activa. Usa /new para crear una.");
+      return NextResponse.json({ ok: true });
+    }
+
+    await db.from("agent_messages").delete().eq("session_id", currentSession.id);
+    await db.from("tool_calls").delete().eq("session_id", currentSession.id);
+
+    await sendTelegramMessage(chatId, "Sesion limpiada. El agente no recuerda mensajes anteriores.");
+    return NextResponse.json({ ok: true });
+  }
+
+  // --- End session management commands ---
+
   let session = await db
     .from("agent_sessions")
     .select("*")
     .eq("user_id", userId)
     .eq("channel", "telegram")
     .eq("status", "active")
-    .order("created_at", { ascending: false })
+    .order("last_used_at", { ascending: false })
     .limit(1)
     .single()
     .then((r) => r.data);
@@ -244,6 +351,7 @@ export async function POST(request: Request) {
         status: "active",
         budget_tokens_used: 0,
         budget_tokens_limit: 100000,
+        last_used_at: new Date().toISOString(),
       })
       .select()
       .single();
@@ -251,9 +359,15 @@ export async function POST(request: Request) {
   }
 
   if (!session) {
-    await sendTelegramMessage(chatId, "Error interno creando sesión.");
+    await sendTelegramMessage(chatId, "Error interno creando sesion.");
     return NextResponse.json({ ok: true });
   }
+
+  // Touch session to mark as current
+  await db
+    .from("agent_sessions")
+    .update({ last_used_at: new Date().toISOString() })
+    .eq("id", session.id);
 
   const { data: profile } = await db
     .from("profiles")

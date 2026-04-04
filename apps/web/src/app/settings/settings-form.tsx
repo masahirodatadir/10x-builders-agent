@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { createBrowserClient } from "@supabase/ssr";
+import { TOOL_CATALOG } from "@agents/types";
 
 interface Props {
   userId: string;
@@ -11,15 +12,6 @@ interface Props {
   telegramLinked: boolean;
   githubConnected: boolean;
 }
-
-const TOOL_IDS = [
-  "get_user_preferences",
-  "list_enabled_tools",
-  "github_list_repos",
-  "github_list_issues",
-  "github_create_issue",
-  "github_create_repo",
-];
 
 export function SettingsForm({ userId, profile, toolSettings, telegramLinked, githubConnected }: Props) {
   const router = useRouter();
@@ -61,7 +53,7 @@ export function SettingsForm({ userId, profile, toolSettings, telegramLinked, gi
       updated_at: new Date().toISOString(),
     }).eq("id", userId);
 
-    for (const toolId of TOOL_IDS) {
+    for (const toolId of TOOL_CATALOG.map((t) => t.id)) {
       await supabase.from("user_tool_settings").upsert(
         {
           user_id: userId,
@@ -148,7 +140,7 @@ export function SettingsForm({ userId, profile, toolSettings, telegramLinked, gi
       <section className="space-y-4">
         <h2 className="text-base font-semibold">Herramientas</h2>
         <div className="space-y-2">
-          {TOOL_IDS.map((id) => (
+          {TOOL_CATALOG.map(({ id, displayName, displayDescription }) => (
             <label key={id} className="flex items-center gap-2 text-sm">
               <input
                 type="checkbox"
@@ -156,7 +148,10 @@ export function SettingsForm({ userId, profile, toolSettings, telegramLinked, gi
                 onChange={() => toggleTool(id)}
                 className="rounded border-neutral-300"
               />
-              {id}
+              <span>
+                <span className="font-medium">{displayName}</span>
+                <span className="ml-1 text-neutral-500">— {displayDescription}</span>
+              </span>
             </label>
           ))}
         </div>

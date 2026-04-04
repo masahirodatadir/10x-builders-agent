@@ -15,22 +15,23 @@ export default async function ChatPage() {
 
   if (!profile?.onboarding_completed) redirect("/onboarding");
 
-  const { data: messages } = await supabase
+  const { data: sessions } = await supabase
     .from("agent_sessions")
-    .select("id")
+    .select("*")
     .eq("user_id", user.id)
     .eq("channel", "web")
     .eq("status", "active")
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .single();
+    .order("last_used_at", { ascending: false });
+
+  const allSessions = sessions ?? [];
+  const currentSession = allSessions[0] ?? null;
 
   let sessionMessages: Array<{ role: string; content: string; created_at: string }> = [];
-  if (messages?.id) {
+  if (currentSession) {
     const { data } = await supabase
       .from("agent_messages")
       .select("role, content, created_at")
-      .eq("session_id", messages.id)
+      .eq("session_id", currentSession.id)
       .order("created_at", { ascending: true })
       .limit(50);
     sessionMessages = data ?? [];
@@ -68,6 +69,8 @@ export default async function ChatPage() {
       <ChatInterface
         agentName={profile.agent_name as string}
         initialMessages={sessionMessages}
+        sessions={allSessions}
+        currentSessionId={currentSession?.id ?? null}
       />
     </div>
   );

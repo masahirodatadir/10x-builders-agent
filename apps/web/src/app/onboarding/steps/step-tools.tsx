@@ -1,49 +1,12 @@
 "use client";
 
+import { TOOL_CATALOG } from "@agents/types";
 import type { OnboardingData } from "../wizard";
 
 interface Props {
   data: OnboardingData;
   onChange: (partial: Partial<OnboardingData>) => void;
 }
-
-const AVAILABLE_TOOLS = [
-  {
-    id: "get_user_preferences",
-    name: "Preferencias del usuario",
-    description: "Consulta tu configuración y preferencias.",
-    risk: "low" as const,
-    requiresIntegration: null,
-  },
-  {
-    id: "list_enabled_tools",
-    name: "Listar herramientas",
-    description: "Muestra qué herramientas tienes habilitadas.",
-    risk: "low" as const,
-    requiresIntegration: null,
-  },
-  {
-    id: "github_list_repos",
-    name: "GitHub: listar repos",
-    description: "Lista tus repositorios de GitHub.",
-    risk: "low" as const,
-    requiresIntegration: "github",
-  },
-  {
-    id: "github_list_issues",
-    name: "GitHub: listar issues",
-    description: "Lista issues de un repositorio.",
-    risk: "low" as const,
-    requiresIntegration: "github",
-  },
-  {
-    id: "github_create_issue",
-    name: "GitHub: crear issue",
-    description: "Crea un issue nuevo (requiere confirmación).",
-    risk: "medium" as const,
-    requiresIntegration: "github",
-  },
-];
 
 const RISK_LABELS = {
   low: { text: "Bajo", color: "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400" },
@@ -72,12 +35,12 @@ export function StepTools({ data, onChange }: Props) {
       </div>
 
       <div className="space-y-3">
-        {AVAILABLE_TOOLS.map((tool) => {
-          const risk = RISK_LABELS[tool.risk];
-          const enabled = data.enabledTools.includes(tool.id);
+        {TOOL_CATALOG.map((t) => {
+          const risk = RISK_LABELS[t.risk];
+          const enabled = data.enabledTools.includes(t.id);
           return (
             <label
-              key={tool.id}
+              key={t.id}
               className={`flex items-start gap-3 rounded-lg border p-3 cursor-pointer transition ${
                 enabled
                   ? "border-blue-500 bg-blue-50 dark:bg-blue-950/20"
@@ -87,23 +50,23 @@ export function StepTools({ data, onChange }: Props) {
               <input
                 type="checkbox"
                 checked={enabled}
-                onChange={() => toggleTool(tool.id)}
+                onChange={() => toggleTool(t.id)}
                 className="mt-0.5 rounded border-neutral-300"
               />
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium">{tool.name}</span>
+                  <span className="text-sm font-medium">{t.displayName}</span>
                   <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${risk.color}`}>
                     {risk.text}
                   </span>
-                  {tool.requiresIntegration && (
+                  {t.requires_integration && (
                     <span className="text-xs text-neutral-400">
-                      requiere {tool.requiresIntegration}
+                      requiere {t.requires_integration}
                     </span>
                   )}
                 </div>
                 <p className="text-xs text-neutral-500 mt-0.5">
-                  {tool.description}
+                  {t.displayDescription}
                 </p>
               </div>
             </label>

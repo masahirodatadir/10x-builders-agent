@@ -1,3 +1,5 @@
+export * from "./catalog";
+
 export type Channel = "web" | "telegram";
 
 export type ToolRisk = "low" | "medium" | "high";
@@ -38,6 +40,7 @@ export interface AgentSession {
   status: "active" | "closed";
   budget_tokens_used: number;
   budget_tokens_limit: number;
+  last_used_at: string;
   created_at: string;
   updated_at: string;
 }
@@ -81,6 +84,8 @@ export interface ToolDefinition {
   risk: ToolRisk;
   requires_integration?: string;
   parameters_schema: Record<string, unknown>;
+  displayName: string;
+  displayDescription: string;
 }
 
 export interface PendingConfirmation {

@@ -2,8 +2,9 @@ import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 import type { DbClient } from "@agents/db";
 import type { UserToolSetting, UserIntegration } from "@agents/types";
-import { TOOL_CATALOG, toolRequiresConfirmation } from "./catalog";
-import { createToolCall, updateToolCallStatus } from "@agents/db";
+import { TOOL_CATALOG } from "@agents/types";
+import { TOOL_SCHEMAS } from "./schemas";
+import { withTracking } from "./withTracking";
 
 const GITHUB_API = "https://api.github.com";
 const GITHUB_UA = "10x-builders-agent/1.0";
@@ -17,10 +18,7 @@ export interface ToolContext {
   githubToken?: string;
 }
 
-function isToolAvailable(
-  toolId: string,
-  ctx: ToolContext
-): boolean {
+function isToolAvailable(toolId: string, ctx: ToolContext): boolean {
   const setting = ctx.enabledTools.find((t) => t.tool_id === toolId);
   if (!setting?.enabled) return false;
 
@@ -129,185 +127,68 @@ export async function executeGitHubTool(
   }
 }
 
+type ToolHandlers = {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  [K in string]: (input: any, ctx: ToolContext) => Promise<Record<string, unknown>>;
+};
+
+const TOOL_HANDLERS: ToolHandlers = {
+  get_user_preferences: async (_input, ctx) => {
+    const { getProfile } = await import("@agents/db");
+    const profile = await getProfile(ctx.db, ctx.userId);
+    return {
+      name: profile.name,
+      timezone: profile.timezone,
+      language: profile.language,
+      agent_name: profile.agent_name,
+    };
+  },
+
+  list_enabled_tools: async (_input, ctx) => {
+    const enabled = ctx.enabledTools.filter((t) => t.enabled).map((t) => t.tool_id);
+    return { enabled };
+  },
+
+  github_list_repos: async (input, ctx) =>
+    executeGitHubTool("github_list_repos", input, ctx.githubToken!),
+
+  github_list_issues: async (input, ctx) =>
+    executeGitHubTool("github_list_issues", input, ctx.githubToken!),
+
+  github_create_issue: async (input, ctx) =>
+    executeGitHubTool("github_create_issue", input, ctx.githubToken!),
+
+  github_create_repo: async (input, ctx) =>
+    executeGitHubTool("github_create_repo", input, ctx.githubToken!),
+};
+
+const CONFIRMATION_MESSAGES: Partial<Record<string, (input: Record<string, unknown>) => string>> = {
+  github_create_issue: (input) =>
+    `Se requiere confirmación para crear el issue "${input.title}" en ${input.owner}/${input.repo}.`,
+  github_create_repo: (input) =>
+    `Se requiere confirmación para crear el repositorio "${input.name}"${input.isPrivate ? " (privado)" : ""}.`,
+};
+
 export function buildLangChainTools(ctx: ToolContext) {
   const tools = [];
 
-  if (isToolAvailable("get_user_preferences", ctx)) {
-    tools.push(
-      tool(
-        async () => {
-          const { getProfile } = await import("@agents/db");
-          const profile = await getProfile(ctx.db, ctx.userId);
-          return JSON.stringify({
-            name: profile.name,
-            timezone: profile.timezone,
-            language: profile.language,
-            agent_name: profile.agent_name,
-          });
-        },
-        {
-          name: "get_user_preferences",
-          description: "Returns the current user preferences and agent configuration.",
-          schema: z.object({}),
-        }
-      )
-    );
-  }
+  for (const def of TOOL_CATALOG) {
+    if (!isToolAvailable(def.id, ctx)) continue;
 
-  if (isToolAvailable("list_enabled_tools", ctx)) {
-    tools.push(
-      tool(
-        async () => {
-          const enabled = ctx.enabledTools
-            .filter((t) => t.enabled)
-            .map((t) => t.tool_id);
-          return JSON.stringify(enabled);
-        },
-        {
-          name: "list_enabled_tools",
-          description: "Lists all tools the user has currently enabled.",
-          schema: z.object({}),
-        }
-      )
-    );
-  }
+    const schema = TOOL_SCHEMAS[def.id as keyof typeof TOOL_SCHEMAS];
+    const handler = TOOL_HANDLERS[def.id];
+    if (!schema || !handler) continue;
 
-  if (isToolAvailable("github_list_repos", ctx)) {
-    tools.push(
-      tool(
-        async (input) => {
-          const record = await createToolCall(
-            ctx.db, ctx.sessionId, "github_list_repos", input, false
-          );
-          try {
-            const result = await executeGitHubTool("github_list_repos", input, ctx.githubToken!);
-            await updateToolCallStatus(ctx.db, record.id, "executed", result);
-            return JSON.stringify(result);
-          } catch (err) {
-            const errResult = { error: String(err) };
-            await updateToolCallStatus(ctx.db, record.id, "failed", errResult);
-            return JSON.stringify(errResult);
-          }
-        },
-        {
-          name: "github_list_repos",
-          description: "Lists the user's GitHub repositories.",
-          schema: z.object({
-            per_page: z.number().max(30).optional().default(10),
-          }),
-        }
-      )
-    );
-  }
+    const trackedHandler = withTracking(def.id, handler, ctx, {
+      confirmationMessage: CONFIRMATION_MESSAGES[def.id],
+    });
 
-  if (isToolAvailable("github_list_issues", ctx)) {
     tools.push(
-      tool(
-        async (input) => {
-          const record = await createToolCall(
-            ctx.db, ctx.sessionId, "github_list_issues", input, false
-          );
-          try {
-            const result = await executeGitHubTool("github_list_issues", input, ctx.githubToken!);
-            await updateToolCallStatus(ctx.db, record.id, "executed", result);
-            return JSON.stringify(result);
-          } catch (err) {
-            const errResult = { error: String(err) };
-            await updateToolCallStatus(ctx.db, record.id, "failed", errResult);
-            return JSON.stringify(errResult);
-          }
-        },
-        {
-          name: "github_list_issues",
-          description: "Lists issues for a given repository.",
-          schema: z.object({
-            owner: z.string(),
-            repo: z.string(),
-            state: z.enum(["open", "closed", "all"]).optional().default("open"),
-          }),
-        }
-      )
-    );
-  }
-
-  if (isToolAvailable("github_create_issue", ctx)) {
-    tools.push(
-      tool(
-        async (input) => {
-          const needsConfirm = toolRequiresConfirmation("github_create_issue");
-          const record = await createToolCall(
-            ctx.db, ctx.sessionId, "github_create_issue", input, needsConfirm
-          );
-          if (needsConfirm) {
-            return JSON.stringify({
-              pending_confirmation: true,
-              tool_call_id: record.id,
-              tool_name: "github_create_issue",
-              message: `Se requiere confirmación para crear el issue "${input.title}" en ${input.owner}/${input.repo}.`,
-              args: input,
-            });
-          }
-          try {
-            const result = await executeGitHubTool("github_create_issue", input, ctx.githubToken!);
-            await updateToolCallStatus(ctx.db, record.id, "executed", result);
-            return JSON.stringify(result);
-          } catch (err) {
-            const errResult = { error: String(err) };
-            await updateToolCallStatus(ctx.db, record.id, "failed", errResult);
-            return JSON.stringify(errResult);
-          }
-        },
-        {
-          name: "github_create_issue",
-          description: "Creates a new issue in a GitHub repository. Requires confirmation.",
-          schema: z.object({
-            owner: z.string(),
-            repo: z.string(),
-            title: z.string(),
-            body: z.string().optional().default(""),
-          }),
-        }
-      )
-    );
-  }
-
-  if (isToolAvailable("github_create_repo", ctx)) {
-    tools.push(
-      tool(
-        async (input) => {
-          const needsConfirm = toolRequiresConfirmation("github_create_repo");
-          const record = await createToolCall(
-            ctx.db, ctx.sessionId, "github_create_repo", input, needsConfirm
-          );
-          if (needsConfirm) {
-            return JSON.stringify({
-              pending_confirmation: true,
-              tool_call_id: record.id,
-              tool_name: "github_create_repo",
-              message: `Se requiere confirmación para crear el repositorio "${input.name}"${input.isPrivate ? " (privado)" : ""}.`,
-              args: input,
-            });
-          }
-          try {
-            const result = await executeGitHubTool("github_create_repo", input, ctx.githubToken!);
-            await updateToolCallStatus(ctx.db, record.id, "executed", result);
-            return JSON.stringify(result);
-          } catch (err) {
-            const errResult = { error: String(err) };
-            await updateToolCallStatus(ctx.db, record.id, "failed", errResult);
-            return JSON.stringify(errResult);
-          }
-        },
-        {
-          name: "github_create_repo",
-          description: "Creates a new GitHub repository for the authenticated user. Requires confirmation.",
-          schema: z.object({
-            name: z.string(),
-            description: z.string().optional().default(""),
-            isPrivate: z.boolean().optional().default(false),
-          }),
-        }
-      )
+      tool(trackedHandler, {
+        name: def.name,
+        description: def.description,
+        schema: schema as z.ZodTypeAny,
+      })
     );
   }
 
