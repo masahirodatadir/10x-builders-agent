@@ -37,6 +37,8 @@ export default async function ChatPage() {
       .from("agent_messages")
       .select("role, content, created_at, structured_payload")
       .eq("session_id", currentSession.id)
+      .not("content", "is", null)
+      .neq("content", "")
       .order("created_at", { ascending: true })
       .limit(50);
     sessionMessages = data ?? [];

@@ -116,6 +116,8 @@ export function ChatInterface({
       .from("agent_messages")
       .select("role, content, created_at, structured_payload")
       .eq("session_id", sessionId)
+      .not("content", "is", null)
+      .neq("content", "")
       .order("created_at", { ascending: true })
       .limit(50);
 
