@@ -144,6 +144,44 @@ export const TOOL_CATALOG: ToolDefinition[] = [
     displayDescription: "Reemplaza una única aparición de un fragmento en un archivo existente. No crea archivos nuevos.",
   },
   {
+    id: "schedule_task",
+    name: "schedule_task",
+    description:
+      "Creates a scheduled task that will run a given prompt automatically at a specified time or on a recurring cron schedule. For a one-time task provide run_at (ISO 8601 datetime). For a recurring task provide cron_expr (standard 5-field cron expression, e.g. '0 9 * * 1' for every Monday at 9 AM) and optionally timezone (IANA tz, defaults to user timezone). The task will trigger the agent with the given prompt and send the result via Telegram by default. Requires confirmation.",
+    risk: "medium",
+    parameters_schema: {
+      type: "object",
+      properties: {
+        prompt: {
+          type: "string",
+          description: "The instruction/prompt the agent will execute when the task fires.",
+        },
+        schedule_type: {
+          type: "string",
+          enum: ["one_time", "recurring"],
+          description: "Whether this is a single execution or a recurring one.",
+        },
+        run_at: {
+          type: "string",
+          description: "ISO 8601 datetime for one_time tasks (e.g. '2026-04-10T09:00:00Z').",
+        },
+        cron_expr: {
+          type: "string",
+          description:
+            "5-field cron expression for recurring tasks (e.g. '0 9 * * 1' = every Monday 9 AM).",
+        },
+        timezone: {
+          type: "string",
+          description: "IANA timezone name (e.g. 'America/Bogota'). Defaults to user timezone.",
+        },
+      },
+      required: ["prompt", "schedule_type"],
+    },
+    displayName: "Programar tarea",
+    displayDescription:
+      "Crea una tarea programada que el agente ejecutará automáticamente y notificará por Telegram.",
+  },
+  {
     id: "bash",
     name: "bash",
     description:

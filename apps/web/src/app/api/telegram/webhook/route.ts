@@ -5,6 +5,7 @@ import {
   getPendingToolCall,
 } from "@agents/db";
 import { runAgent } from "@agents/agent";
+import { sendTelegramMessage } from "@/lib/telegram/send";
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN ?? "";
 const WEBHOOK_SECRET = process.env.TELEGRAM_WEBHOOK_SECRET ?? "";
@@ -23,26 +24,6 @@ interface TelegramUpdate {
     message: { chat: { id: number }; message_id: number };
     data: string;
   };
-}
-
-async function sendTelegramMessage(
-  chatId: number,
-  text: string,
-  replyMarkup?: Record<string, unknown>
-) {
-  const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      chat_id: chatId,
-      text,
-      ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
-    }),
-  });
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    console.error("Telegram sendMessage failed:", res.status, body);
-  }
 }
 
 function parseBotCommand(messageText: string): { command: string; args: string } {

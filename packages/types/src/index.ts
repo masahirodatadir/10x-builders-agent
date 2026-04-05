@@ -94,3 +94,35 @@ export interface PendingConfirmation {
   message: string;
   args: Record<string, unknown>;
 }
+
+export type ScheduleType = "one_time" | "recurring";
+export type ScheduledTaskStatus = "active" | "paused" | "completed" | "failed";
+
+export interface ScheduledTask {
+  id: string;
+  user_id: string;
+  prompt: string;
+  schedule_type: ScheduleType;
+  run_at?: string;
+  cron_expr?: string;
+  timezone: string;
+  status: ScheduledTaskStatus;
+  last_run_at?: string;
+  next_run_at?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export type TaskRunStatus = "running" | "completed" | "failed";
+
+export interface ScheduledTaskRun {
+  id: string;
+  task_id: string;
+  status: TaskRunStatus;
+  started_at: string;
+  finished_at?: string;
+  error?: string;
+  agent_session_id?: string;
+  notified: boolean;
+  notification_error?: string;
+}

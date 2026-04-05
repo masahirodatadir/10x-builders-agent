@@ -50,6 +50,8 @@ export interface AgentInput {
   enabledTools: UserToolSetting[];
   integrations: UserIntegration[];
   githubToken?: string;
+  /** Skip HITL interrupts and auto-approve all tool calls. Use only for unattended runs (e.g. cron). */
+  bypassConfirmation?: boolean;
 }
 
 export interface AgentOutput {
@@ -88,6 +90,14 @@ function buildConfirmationMessage(
       const terminal = args.terminal ? ` en terminal "${args.terminal}"` : "";
       return `Se requiere confirmación para ejecutar el siguiente comando bash${terminal}:\n\`\`\`\n${preview}\n\`\`\``;
     }
+    case "schedule_task": {
+      const schedType = args.schedule_type === "recurring" ? "recurrente" : "una sola vez";
+      const when =
+        args.schedule_type === "one_time"
+          ? `el ${new Date(args.run_at as string).toLocaleString("es")}`
+          : `con expresión cron "${args.cron_expr}"`;
+      return `Se requiere confirmación para programar una tarea (${schedType}) ${when}.\n\nPrompt: "${args.prompt}"`;
+    }
     default:
       return `Se requiere confirmación para ejecutar "${toolId}" (riesgo: ${getToolRisk(toolId)}).`;
   }
@@ -106,6 +116,7 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
     enabledTools,
     integrations,
     githubToken,
+    bypassConfirmation = false,
   } = input;
 
   const model = createChatModel();
@@ -119,9 +130,20 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
   async function agentNode(
     state: typeof GraphState.State
   ): Promise<Partial<typeof GraphState.State>> {
+    const currentDate = new Date().toLocaleString("es", {
+      timeZone: "America/Bogota",
+      weekday: "long",
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+    const systemPromptWithDate = `${state.systemPrompt}\n\nFecha y hora actual: ${currentDate} (hora Colombia).`;
+
     // Inject SystemMessage fresh so it is never accumulated in state.messages.
     const response = await modelWithTools.invoke([
-      new SystemMessage(state.systemPrompt),
+      new SystemMessage(systemPromptWithDate),
       ...state.messages,
     ]);
     return { messages: [response] };
@@ -143,6 +165,24 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
       toolCallNames.push(tc.name);
 
       if (def && toolRequiresConfirmation(toolId)) {
+        if (bypassConfirmation) {
+          // Unattended run (e.g. cron): auto-approve without interrupting.
+          const record = await createToolCall(db, sessionId, toolId, tc.args as Record<string, unknown>, true);
+          await updateToolCallStatus(db, record.id, "approved");
+
+          const autoHandler = TOOL_HANDLERS[toolId];
+          try {
+            const result = await autoHandler(tc.args as Record<string, unknown>, toolCtx);
+            await updateToolCallStatus(db, record.id, "executed", result);
+            results.push(new ToolMessage({ content: JSON.stringify(result), tool_call_id: tc.id! }));
+          } catch (err) {
+            const errResult = { error: String(err) };
+            await updateToolCallStatus(db, record.id, "failed", errResult);
+            results.push(new ToolMessage({ content: JSON.stringify(errResult), tool_call_id: tc.id! }));
+          }
+          continue;
+        }
+
         // Idempotent: on graph replay after resume the record already exists.
         let record = await findExistingPendingToolCall(db, sessionId, toolId);
         if (!record) {
