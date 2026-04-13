@@ -1,9 +1,45 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { createBrowserClient } from "@supabase/ssr";
 import { TOOL_CATALOG } from "@agents/types";
+
+function notionOAuthErrorMessage(reason: string | null): string {
+  switch (reason) {
+    case "access_denied":
+      return "Autorización cancelada en Notion.";
+    case "state_mismatch":
+      return "La sesión de OAuth no coincide. Vuelve a intentar conectar.";
+    case "no_code":
+      return "Notion no devolvió un código de autorización. Vuelve a intentar.";
+    case "token_exchange":
+      return "No se pudo obtener el token de Notion. Comprueba el client secret y la URL de redirección.";
+    case "config":
+      return "Falta configurar NOTION_CLIENT_ID o NOTION_CLIENT_SECRET en el servidor.";
+    default:
+      return reason
+        ? `No se pudo conectar Notion (${reason}).`
+        : "No se pudo conectar Notion.";
+  }
+}
+
+function githubOAuthErrorMessage(reason: string | null): string {
+  switch (reason) {
+    case "access_denied":
+      return "Autorización cancelada en GitHub.";
+    case "state_mismatch":
+      return "La sesión de OAuth no coincide. Vuelve a intentar conectar.";
+    case "no_code":
+      return "GitHub no devolvió un código de autorización. Vuelve a intentar.";
+    case "token_exchange":
+      return "No se pudo obtener el token de GitHub. Comprueba el client secret y vuelve a intentar.";
+    default:
+      return reason
+        ? `No se pudo conectar GitHub (${reason}).`
+        : "No se pudo conectar GitHub.";
+  }
+}
 
 interface Props {
   userId: string;
@@ -11,16 +47,37 @@ interface Props {
   toolSettings: Array<{ tool_id: string; enabled: boolean }>;
   telegramLinked: boolean;
   githubConnected: boolean;
+  notionConnected: boolean;
 }
 
-export function SettingsForm({ userId, profile, toolSettings, telegramLinked, githubConnected }: Props) {
+export function SettingsForm({
+  userId,
+  profile,
+  toolSettings,
+  telegramLinked,
+  githubConnected,
+  notionConnected,
+}: Props) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [githubStatus, setGithubStatus] = useState<"connected" | "disconnected">(
     githubConnected ? "connected" : "disconnected"
   );
-  const [disconnecting, setDisconnecting] = useState(false);
+  const [disconnectingGithub, setDisconnectingGithub] = useState(false);
+  const [disconnectingNotion, setDisconnectingNotion] = useState(false);
+  const [githubOAuthNotice, setGithubOAuthNotice] = useState<{
+    type: "success" | "error";
+    text: string;
+  } | null>(null);
+  const [notionOAuthNotice, setNotionOAuthNotice] = useState<{
+    type: "success" | "error";
+    text: string;
+  } | null>(null);
+  const [notionStatus, setNotionStatus] = useState<"connected" | "disconnected">(
+    notionConnected ? "connected" : "disconnected"
+  );
 
   const [name, setName] = useState((profile?.name as string) ?? "");
   const [agentName, setAgentName] = useState((profile?.agent_name as string) ?? "Agente");
@@ -36,6 +93,44 @@ export function SettingsForm({ userId, profile, toolSettings, telegramLinked, gi
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
   );
+
+  useEffect(() => {
+    const gh = searchParams.get("github");
+    const reason = searchParams.get("reason");
+    if (gh === "connected") {
+      setGithubOAuthNotice({ type: "success", text: "GitHub conectado correctamente." });
+      setGithubStatus("connected");
+      router.replace("/settings", { scroll: false });
+      return;
+    }
+    if (gh === "error") {
+      setGithubOAuthNotice({ type: "error", text: githubOAuthErrorMessage(reason) });
+      router.replace("/settings", { scroll: false });
+    }
+  }, [searchParams, router]);
+
+  useEffect(() => {
+    const n = searchParams.get("notion");
+    const reason = searchParams.get("reason");
+    if (n === "connected") {
+      setNotionOAuthNotice({ type: "success", text: "Notion conectado correctamente." });
+      setNotionStatus("connected");
+      router.replace("/settings", { scroll: false });
+      return;
+    }
+    if (n === "error") {
+      setNotionOAuthNotice({ type: "error", text: notionOAuthErrorMessage(reason) });
+      router.replace("/settings", { scroll: false });
+    }
+  }, [searchParams, router]);
+
+  useEffect(() => {
+    setGithubStatus(githubConnected ? "connected" : "disconnected");
+  }, [githubConnected]);
+
+  useEffect(() => {
+    setNotionStatus(notionConnected ? "connected" : "disconnected");
+  }, [notionConnected]);
 
   function toggleTool(id: string) {
     setEnabledTools((prev) =>
@@ -72,7 +167,7 @@ export function SettingsForm({ userId, profile, toolSettings, telegramLinked, gi
   }
 
   async function handleDisconnectGithub() {
-    setDisconnecting(true);
+    setDisconnectingGithub(true);
     try {
       const res = await fetch("/api/integrations/github/disconnect", { method: "POST" });
       if (res.ok) {
@@ -80,7 +175,20 @@ export function SettingsForm({ userId, profile, toolSettings, telegramLinked, gi
         router.refresh();
       }
     } finally {
-      setDisconnecting(false);
+      setDisconnectingGithub(false);
+    }
+  }
+
+  async function handleDisconnectNotion() {
+    setDisconnectingNotion(true);
+    try {
+      const res = await fetch("/api/integrations/notion/disconnect", { method: "POST" });
+      if (res.ok) {
+        setNotionStatus("disconnected");
+        router.refresh();
+      }
+    } finally {
+      setDisconnectingNotion(false);
     }
   }
 
@@ -160,6 +268,25 @@ export function SettingsForm({ userId, profile, toolSettings, telegramLinked, gi
       {/* GitHub */}
       <section className="space-y-4">
         <h2 className="text-base font-semibold">GitHub</h2>
+        {githubOAuthNotice && (
+          <div
+            className={`flex items-start justify-between gap-3 rounded-md border px-3 py-2 text-sm ${
+              githubOAuthNotice.type === "success"
+                ? "border-green-200 bg-green-50 text-green-900 dark:border-green-800 dark:bg-green-950/40 dark:text-green-100"
+                : "border-red-200 bg-red-50 text-red-900 dark:border-red-800 dark:bg-red-950/40 dark:text-red-100"
+            }`}
+          >
+            <span>{githubOAuthNotice.text}</span>
+            <button
+              type="button"
+              onClick={() => setGithubOAuthNotice(null)}
+              className="shrink-0 rounded px-1.5 text-xs font-medium opacity-70 hover:opacity-100"
+              aria-label="Cerrar"
+            >
+              ×
+            </button>
+          </div>
+        )}
         {githubStatus === "connected" ? (
           <div className="flex items-center justify-between rounded-md border border-neutral-200 p-4 dark:border-neutral-800">
             <div className="flex items-center gap-2">
@@ -168,10 +295,10 @@ export function SettingsForm({ userId, profile, toolSettings, telegramLinked, gi
             </div>
             <button
               onClick={handleDisconnectGithub}
-              disabled={disconnecting}
+              disabled={disconnectingGithub}
               className="rounded-md border border-red-300 px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-900/20"
             >
-              {disconnecting ? "Desconectando..." : "Desconectar"}
+              {disconnectingGithub ? "Desconectando..." : "Desconectar"}
             </button>
           </div>
         ) : (
@@ -184,6 +311,58 @@ export function SettingsForm({ userId, profile, toolSettings, telegramLinked, gi
               className="inline-block rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-800 dark:bg-white dark:text-neutral-900 dark:hover:bg-neutral-200"
             >
               Conectar GitHub
+            </a>
+          </div>
+        )}
+      </section>
+
+      {/* Notion */}
+      <section className="space-y-4">
+        <h2 className="text-base font-semibold">Notion</h2>
+        {notionOAuthNotice && (
+          <div
+            className={`flex items-start justify-between gap-3 rounded-md border px-3 py-2 text-sm ${
+              notionOAuthNotice.type === "success"
+                ? "border-green-200 bg-green-50 text-green-900 dark:border-green-800 dark:bg-green-950/40 dark:text-green-100"
+                : "border-red-200 bg-red-50 text-red-900 dark:border-red-800 dark:bg-red-950/40 dark:text-red-100"
+            }`}
+          >
+            <span>{notionOAuthNotice.text}</span>
+            <button
+              type="button"
+              onClick={() => setNotionOAuthNotice(null)}
+              className="shrink-0 rounded px-1.5 text-xs font-medium opacity-70 hover:opacity-100"
+              aria-label="Cerrar"
+            >
+              ×
+            </button>
+          </div>
+        )}
+        {notionStatus === "connected" ? (
+          <div className="flex items-center justify-between rounded-md border border-neutral-200 p-4 dark:border-neutral-800">
+            <div className="flex items-center gap-2">
+              <span className="inline-block h-2 w-2 rounded-full bg-green-500" />
+              <span className="text-sm font-medium text-green-700 dark:text-green-400">Conectado</span>
+            </div>
+            <button
+              onClick={handleDisconnectNotion}
+              disabled={disconnectingNotion}
+              className="rounded-md border border-red-300 px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-900/20"
+            >
+              {disconnectingNotion ? "Desconectando..." : "Desconectar"}
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            <p className="text-sm text-neutral-500">
+              Conecta Notion para que el agente busque y lea páginas que <strong>tú compartas</strong> con la
+              integración durante la autorización (o desde &quot;Conexiones&quot; en cada página en Notion).
+            </p>
+            <a
+              href="/api/integrations/notion"
+              className="inline-block rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-800 dark:bg-white dark:text-neutral-900 dark:hover:bg-neutral-200"
+            >
+              Conectar Notion
             </a>
           </div>
         )}

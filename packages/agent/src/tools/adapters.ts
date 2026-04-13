@@ -1,12 +1,13 @@
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
-import type { DbClient } from "@agents/db";
+import type { DbClient, NotionStoredTokens } from "@agents/db";
 import type { UserToolSetting, UserIntegration } from "@agents/types";
 import { TOOL_CATALOG } from "@agents/types";
 import { TOOL_SCHEMAS } from "./schemas";
 import { withTracking } from "./withTracking";
 import { executeBash } from "./bashExec";
 import { executeReadFile, executeWriteFile, executeEditFile } from "./fileTools";
+import { executeNotionGetPageText, executeNotionSearch } from "./notion";
 
 const GITHUB_API = "https://api.github.com";
 const GITHUB_UA = "10x-builders-agent/1.0";
@@ -18,6 +19,7 @@ export interface ToolContext {
   enabledTools: UserToolSetting[];
   integrations: UserIntegration[];
   githubToken?: string;
+  notionTokens?: NotionStoredTokens;
 }
 
 function isToolAvailable(toolId: string, ctx: ToolContext): boolean {
@@ -41,6 +43,36 @@ function ghHeaders(token: string) {
     "User-Agent": GITHUB_UA,
     "X-GitHub-Api-Version": "2022-11-28",
   };
+}
+
+const GITHUB_TOKEN_MISSING: Record<string, unknown> = {
+  error:
+    "GitHub no conectado o token no disponible. Conecta tu cuenta en Ajustes.",
+};
+
+function withGithubToken(
+  ctx: ToolContext,
+  run: (token: string) => Promise<Record<string, unknown>>
+): Promise<Record<string, unknown>> {
+  if (!ctx.githubToken) {
+    return Promise.resolve(GITHUB_TOKEN_MISSING);
+  }
+  return run(ctx.githubToken);
+}
+
+const NOTION_TOKEN_MISSING: Record<string, unknown> = {
+  error:
+    "Notion no conectado o sin token. Conecta Notion en Ajustes y comparte las páginas con la integración.",
+};
+
+function withNotionTokens(
+  ctx: ToolContext,
+  run: () => Promise<Record<string, unknown>>
+): Promise<Record<string, unknown>> {
+  if (!ctx.notionTokens?.access_token) {
+    return Promise.resolve(NOTION_TOKEN_MISSING);
+  }
+  return run();
 }
 
 async function ghFetch(token: string, path: string, init?: RequestInit) {
@@ -152,16 +184,24 @@ export const TOOL_HANDLERS: ToolHandlers = {
   },
 
   github_list_repos: async (input, ctx) =>
-    executeGitHubTool("github_list_repos", input, ctx.githubToken!),
+    withGithubToken(ctx, (token) => executeGitHubTool("github_list_repos", input, token)),
 
   github_list_issues: async (input, ctx) =>
-    executeGitHubTool("github_list_issues", input, ctx.githubToken!),
+    withGithubToken(ctx, (token) => executeGitHubTool("github_list_issues", input, token)),
 
   github_create_issue: async (input, ctx) =>
-    executeGitHubTool("github_create_issue", input, ctx.githubToken!),
+    withGithubToken(ctx, (token) => executeGitHubTool("github_create_issue", input, token)),
 
   github_create_repo: async (input, ctx) =>
-    executeGitHubTool("github_create_repo", input, ctx.githubToken!),
+    withGithubToken(ctx, (token) => executeGitHubTool("github_create_repo", input, token)),
+
+  notion_search: async (input, ctx) =>
+    withNotionTokens(ctx, () => executeNotionSearch(ctx, input as Record<string, unknown>)),
+
+  notion_get_page_text: async (input, ctx) =>
+    withNotionTokens(ctx, () =>
+      executeNotionGetPageText(ctx, input as Record<string, unknown>)
+    ),
 
   read_file: async (input: { path: string; offset?: number; limit?: number }) => {
     const result = await executeReadFile(input);

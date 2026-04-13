@@ -17,7 +17,7 @@ export async function GET() {
     .eq("user_id", user.id)
     .eq("channel", "web")
     .eq("status", "active")
-    .order("last_used_at", { ascending: false });
+    .order("updated_at", { ascending: false });
 
   return NextResponse.json({ sessions: sessions ?? [] });
 }
@@ -41,7 +41,6 @@ export async function POST() {
       status: "active",
       budget_tokens_used: 0,
       budget_tokens_limit: 100000,
-      last_used_at: new Date().toISOString(),
     })
     .select()
     .single();

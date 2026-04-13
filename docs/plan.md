@@ -36,7 +36,7 @@ Construir un agente que permita a un usuario **gestionar tareas y ejecutar accio
 ### Fase 4: Tools con confirmación
 
 - '[ ]' Tools internas: `get_user_preferences`, `list_enabled_tools`
-- '[ ]' Tools GitHub (stub): `github_list_repos`, `github_list_issues`, `github_create_issue, github_create_repo`
+- '[x]' Tools GitHub (OAuth App, API REST, token AES-256-GCM): `github_list_repos`, `github_list_issues`, `github_create_issue`, `github_create_repo`
 - '[ ]' `github_create_issue` con riesgo "medium" → genera `pending_confirmation`
 - '[ ]' Tabla `tool_calls` para tracking de estado
 

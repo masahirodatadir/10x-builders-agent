@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { SettingsForm } from "./settings-form";
@@ -31,6 +32,13 @@ export default async function SettingsPage() {
     .eq("provider", "github")
     .single();
 
+  const { data: notionIntegration } = await supabase
+    .from("user_integrations")
+    .select("*")
+    .eq("user_id", user.id)
+    .eq("provider", "notion")
+    .single();
+
   return (
     <div className="min-h-screen">
       <header className="border-b border-neutral-200 px-4 py-3 dark:border-neutral-800">
@@ -45,13 +53,16 @@ export default async function SettingsPage() {
         </div>
       </header>
       <main className="mx-auto max-w-2xl px-4 py-8">
-        <SettingsForm
-          userId={user.id}
-          profile={profile}
-          toolSettings={toolSettings ?? []}
-          telegramLinked={!!telegramAccount}
-          githubConnected={githubIntegration?.status === "active"}
-        />
+        <Suspense fallback={<p className="text-sm text-neutral-500">Cargando…</p>}>
+          <SettingsForm
+            userId={user.id}
+            profile={profile}
+            toolSettings={toolSettings ?? []}
+            telegramLinked={!!telegramAccount}
+            githubConnected={githubIntegration?.status === "active"}
+            notionConnected={notionIntegration?.status === "active"}
+          />
+        </Suspense>
       </main>
     </div>
   );

@@ -12,7 +12,7 @@ import {
   ToolMessage,
   type BaseMessage,
 } from "@langchain/core/messages";
-import type { DbClient } from "@agents/db";
+import type { DbClient, NotionStoredTokens } from "@agents/db";
 import type { UserToolSetting, UserIntegration, PendingConfirmation } from "@agents/types";
 import {
   TOOL_CATALOG,
@@ -50,6 +50,7 @@ export interface AgentInput {
   enabledTools: UserToolSetting[];
   integrations: UserIntegration[];
   githubToken?: string;
+  notionTokens?: NotionStoredTokens;
   /** Skip HITL interrupts and auto-approve all tool calls. Use only for unattended runs (e.g. cron). */
   bypassConfirmation?: boolean;
 }
@@ -116,11 +117,20 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
     enabledTools,
     integrations,
     githubToken,
+    notionTokens,
     bypassConfirmation = false,
   } = input;
 
   const model = createChatModel();
-  const toolCtx: ToolContext = { db, userId, sessionId, enabledTools, integrations, githubToken };
+  const toolCtx: ToolContext = {
+    db,
+    userId,
+    sessionId,
+    enabledTools,
+    integrations,
+    githubToken,
+    notionTokens,
+  };
   const lcTools = buildLangChainTools(toolCtx);
 
   const modelWithTools = lcTools.length > 0 ? model.bindTools(lcTools) : model;
@@ -284,6 +294,47 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
 
   const config = { configurable: { thread_id: sessionId } };
 
+  /** OpenAI-compatible APIs require every assistant tool_calls block to be followed by ToolMessages. */
+  function messagesHaveUnresolvedToolCalls(messages: BaseMessage[] | undefined): boolean {
+    if (!messages?.length) return false;
+    const pending = new Set<string>();
+    for (const m of messages) {
+      if (m instanceof HumanMessage && pending.size > 0) return true;
+      if (m instanceof AIMessage && m.tool_calls?.length) {
+        for (const tc of m.tool_calls) {
+          if (tc.id) pending.add(tc.id);
+        }
+      }
+      if (m instanceof ToolMessage && m.tool_call_id) pending.delete(m.tool_call_id);
+    }
+    return pending.size > 0;
+  }
+
+  /**
+   * New user input while the graph is interrupted (HITL) or after /clear without clearing
+   * checkpoints merges a HumanMessage after an incomplete tool turn → provider 400.
+   */
+  async function ensureGraphReadyForNewUserMessage(): Promise<void> {
+    const MAX = 32;
+    const checkpointer = await getCheckpointer();
+    for (let i = 0; i < MAX; i++) {
+      const snap = await app.getState(config);
+      const hasInterrupt = snap.tasks?.some((t) => (t.interrupts?.length ?? 0) > 0);
+      const msgs = snap.values?.messages as BaseMessage[] | undefined;
+      const orphanSequence = messagesHaveUnresolvedToolCalls(msgs);
+
+      if (!hasInterrupt && !orphanSequence) return;
+
+      if (hasInterrupt) {
+        await app.invoke(new Command({ resume: "reject" }), config);
+        continue;
+      }
+
+      await checkpointer.deleteThread(sessionId);
+      return;
+    }
+  }
+
   let finalState: typeof GraphState.State & { [INTERRUPT]?: unknown[] };
 
   if (resumeDecision) {
@@ -293,6 +344,7 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
       config
     );
   } else {
+    await ensureGraphReadyForNewUserMessage();
     // New message — persist to DB (audit log) then append to checkpointer state.
     // The checkpointer is the sole source of truth for message history; we never
     // reconstruct from DB to avoid duplicating messages across invocations.

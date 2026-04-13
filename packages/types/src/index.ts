@@ -40,7 +40,8 @@ export interface AgentSession {
   status: "active" | "closed";
   budget_tokens_used: number;
   budget_tokens_limit: number;
-  last_used_at: string;
+  /** Present when migration 00002 has been applied */
+  last_used_at?: string;
   created_at: string;
   updated_at: string;
 }

@@ -22,6 +22,17 @@ export const TOOL_SCHEMAS = {
     description: z.string().optional().default(""),
     isPrivate: z.boolean().optional().default(false),
   }),
+  notion_search: z.object({
+    query: z.string().min(1).describe("Text to search for in titles and content."),
+    page_size: z.number().int().min(1).max(25).optional().default(10),
+    filter_type: z.enum(["page", "database"]).optional(),
+  }),
+  notion_get_page_text: z.object({
+    page_id: z
+      .string()
+      .min(1)
+      .describe("Notion page id (UUID), from notion_search or a Notion URL."),
+  }),
   read_file: z.object({
     path: z.string().describe("Absolute path or path relative to the server process working directory."),
     offset: z.number().int().min(1).optional().describe("1-based line number to start reading from. Defaults to 1."),

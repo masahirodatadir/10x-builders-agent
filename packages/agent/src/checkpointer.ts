@@ -20,3 +20,9 @@ export async function getCheckpointer(): Promise<PostgresSaver> {
   }
   return _saver;
 }
+
+/** Removes all LangGraph checkpoints for this thread (same id as `agent_sessions.id`). */
+export async function deleteSessionCheckpoint(sessionId: string): Promise<void> {
+  const saver = await getCheckpointer();
+  await saver.deleteThread(sessionId);
+}

@@ -32,7 +32,7 @@ export async function getActiveSession(
     .eq("user_id", userId)
     .eq("channel", channel)
     .eq("status", "active")
-    .order("last_used_at", { ascending: false })
+    .order("updated_at", { ascending: false })
     .limit(1)
     .single();
   return data as AgentSession | null;
@@ -59,7 +59,7 @@ export async function listSessions(
     .eq("user_id", userId)
     .eq("channel", channel)
     .eq("status", "active")
-    .order("last_used_at", { ascending: false });
+    .order("updated_at", { ascending: false });
   if (error) throw error;
   return (data ?? []) as AgentSession[];
 }
@@ -100,7 +100,7 @@ export async function touchSession(
   const now = new Date().toISOString();
   const { error } = await db
     .from("agent_sessions")
-    .update({ last_used_at: now, updated_at: now })
+    .update({ updated_at: now })
     .eq("id", sessionId);
   if (error) throw error;
 }

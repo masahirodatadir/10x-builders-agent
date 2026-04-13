@@ -21,7 +21,7 @@ interface Message {
 interface SessionItem {
   id: string;
   created_at: string;
-  last_used_at: string;
+  updated_at: string;
   status: string;
 }
 
@@ -217,6 +217,8 @@ export function ChatInterface({
     const text = input.trim();
     if (!text || loading) return;
 
+    const sessionIdBeforeSend = activeSessionId;
+
     const userMsg: Message = { role: "user", content: text };
     setMessages((prev) => [...prev, userMsg]);
     setInput("");
@@ -230,6 +232,27 @@ export function ChatInterface({
       });
 
       const data = await res.json();
+
+      if (
+        typeof data.sessionId === "string" &&
+        data.sessionId &&
+        !sessionIdBeforeSend
+      ) {
+        setActiveSessionId(data.sessionId);
+        setSessionList((prev) => {
+          if (prev.some((s) => s.id === data.sessionId)) return prev;
+          const now = new Date().toISOString();
+          return [
+            {
+              id: data.sessionId,
+              created_at: now,
+              updated_at: now,
+              status: "active",
+            },
+            ...prev,
+          ];
+        });
+      }
 
       if (data.response) {
         setMessages((prev) => [
@@ -259,7 +282,6 @@ export function ChatInterface({
     }
   }
 
-  const isReadOnly = !activeSessionId;
   const hasPendingConfirmation = messages.some((m) => m.confirmationStatus === "pending");
 
   return (
@@ -410,12 +432,12 @@ export function ChatInterface({
               value={input}
               onChange={(e) => setInput(e.target.value)}
               placeholder="Escribe tu mensaje..."
-              disabled={loading || isReadOnly || hasPendingConfirmation}
+              disabled={loading || hasPendingConfirmation}
               className="flex-1 rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-50 dark:border-neutral-700 dark:bg-neutral-900"
             />
             <button
               type="submit"
-              disabled={loading || !input.trim() || isReadOnly || hasPendingConfirmation}
+              disabled={loading || !input.trim() || hasPendingConfirmation}
               className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
             >
               Enviar

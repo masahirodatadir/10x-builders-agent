@@ -1,6 +1,11 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { createServerClient, getPendingToolCall, decrypt } from "@agents/db";
+import {
+  createServerClient,
+  decrypt,
+  getPendingToolCall,
+  loadNotionTokenBundle,
+} from "@agents/db";
 import { runAgent } from "@agents/agent";
 
 export async function POST(request: Request) {
@@ -69,6 +74,8 @@ export async function POST(request: Request) {
       }
     }
 
+    const notionTokens = await loadNotionTokenBundle(db, user.id);
+
     // Resume the interrupted LangGraph with the human decision
     const result = await runAgent({
       resumeDecision: action as "approve" | "reject",
@@ -92,6 +99,7 @@ export async function POST(request: Request) {
         created_at: i.created_at as string,
       })),
       githubToken,
+      notionTokens: notionTokens ?? undefined,
     });
 
     return NextResponse.json({

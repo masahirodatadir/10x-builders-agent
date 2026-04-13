@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { createServerClient, createSession, touchSession } from "@agents/db";
 import { ChatInterface } from "./chat-interface";
 
 export default async function ChatPage() {
@@ -21,9 +22,38 @@ export default async function ChatPage() {
     .eq("user_id", user.id)
     .eq("channel", "web")
     .eq("status", "active")
-    .order("last_used_at", { ascending: false });
+    .order("updated_at", { ascending: false });
 
-  const allSessions = sessions ?? [];
+  let allSessions = sessions ?? [];
+  if (allSessions.length === 0) {
+    const payload = {
+      user_id: user.id,
+      channel: "web" as const,
+      status: "active" as const,
+      budget_tokens_used: 0,
+      budget_tokens_limit: 100000,
+    };
+    const { data: fromCookie } = await supabase
+      .from("agent_sessions")
+      .insert(payload)
+      .select()
+      .single();
+
+    let bootstrap: (typeof allSessions)[0] | null = fromCookie;
+    if (!bootstrap) {
+      try {
+        const db = createServerClient();
+        const created = await createSession(db, user.id, "web");
+        await touchSession(db, created.id);
+        bootstrap = created as (typeof allSessions)[0];
+      } catch {
+        // Sin SUPABASE_SERVICE_ROLE_KEY o error de red: el chat cliente crea sesión al enviar.
+      }
+    }
+    if (bootstrap) {
+      allSessions = [bootstrap];
+    }
+  }
   const currentSession = allSessions[0] ?? null;
 
   let sessionMessages: Array<{ role: string; content: string; created_at: string; structured_payload?: Record<string, unknown> }> = [];

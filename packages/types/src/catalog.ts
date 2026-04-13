@@ -91,6 +91,49 @@ export const TOOL_CATALOG: ToolDefinition[] = [
     displayDescription: "Crea un repositorio nuevo en GitHub (requiere confirmación).",
   },
   {
+    id: "notion_search",
+    name: "notion_search",
+    description:
+      "Searches pages and databases in the user's Notion workspace that were shared with this integration during connect. Use before reading a page to find ids. Returns titles and URLs.",
+    risk: "low",
+    requires_integration: "notion",
+    parameters_schema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Search text" },
+        page_size: { type: "number", description: "Max results (1–25), default 10" },
+        filter_type: {
+          type: "string",
+          enum: ["page", "database"],
+          description: "Optional: only pages or only databases",
+        },
+      },
+      required: ["query"],
+    },
+    displayName: "Notion: buscar",
+    displayDescription: "Busca páginas y bases de datos que compartiste con la integración.",
+  },
+  {
+    id: "notion_get_page_text",
+    name: "notion_get_page_text",
+    description:
+      "Reads the text content of a Notion page (block tree) the integration can access. Pass the page id from notion_search. Large pages are truncated with truncated=true.",
+    risk: "low",
+    requires_integration: "notion",
+    parameters_schema: {
+      type: "object",
+      properties: {
+        page_id: {
+          type: "string",
+          description: "Notion page UUID (with or without dashes)",
+        },
+      },
+      required: ["page_id"],
+    },
+    displayName: "Notion: leer página",
+    displayDescription: "Obtiene el texto de una página de Notion (contenido legible).",
+  },
+  {
     id: "read_file",
     name: "read_file",
     description:

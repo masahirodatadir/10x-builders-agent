@@ -1,6 +1,11 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { createServerClient, decrypt, touchSession } from "@agents/db";
+import {
+  createServerClient,
+  decrypt,
+  loadNotionTokenBundle,
+  touchSession,
+} from "@agents/db";
 import { runAgent } from "@agents/agent";
 
 export async function POST(request: Request) {
@@ -47,6 +52,8 @@ export async function POST(request: Request) {
       }
     }
 
+    const notionTokens = await loadNotionTokenBundle(db, user.id);
+
     let session;
     if (requestedSessionId) {
       session = await supabase
@@ -67,7 +74,7 @@ export async function POST(request: Request) {
         .eq("user_id", user.id)
         .eq("channel", "web")
         .eq("status", "active")
-        .order("last_used_at", { ascending: false })
+        .order("updated_at", { ascending: false })
         .limit(1)
         .single()
         .then((r) => r.data);
@@ -116,9 +123,11 @@ export async function POST(request: Request) {
         created_at: i.created_at as string,
       })),
       githubToken,
+      notionTokens: notionTokens ?? undefined,
     });
 
     return NextResponse.json({
+      sessionId: session.id,
       response: result.pendingConfirmation ? null : result.response,
       pendingConfirmation: result.pendingConfirmation ?? null,
       toolCalls: result.toolCalls,

@@ -3,8 +3,9 @@ import {
   createServerClient,
   decrypt,
   getPendingToolCall,
+  loadNotionTokenBundle,
 } from "@agents/db";
-import { runAgent } from "@agents/agent";
+import { runAgent, deleteSessionCheckpoint } from "@agents/agent";
 import { sendTelegramMessage } from "@/lib/telegram/send";
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN ?? "";
@@ -88,6 +89,7 @@ async function buildAgentContext(
     .eq("status", "active");
 
   const githubToken = await resolveGitHubToken(db, userId);
+  const notionTokens = await loadNotionTokenBundle(db, userId);
 
   return {
     userId,
@@ -110,6 +112,7 @@ async function buildAgentContext(
       created_at: i.created_at as string,
     })),
     githubToken,
+    notionTokens: notionTokens ?? undefined,
   };
 }
 
@@ -272,7 +275,7 @@ export async function POST(request: Request) {
       .eq("user_id", userId)
       .eq("channel", "telegram")
       .eq("status", "active")
-      .order("last_used_at", { ascending: false });
+      .order("updated_at", { ascending: false });
 
     if (!userSessions || userSessions.length === 0) {
       await sendTelegramMessage(chatId, "No tienes sesiones. Usa /new para crear una.");
@@ -301,7 +304,6 @@ export async function POST(request: Request) {
         status: "active",
         budget_tokens_used: 0,
         budget_tokens_limit: 100000,
-        last_used_at: new Date().toISOString(),
       })
       .select()
       .single();
@@ -328,7 +330,7 @@ export async function POST(request: Request) {
       .eq("user_id", userId)
       .eq("channel", "telegram")
       .eq("status", "active")
-      .order("last_used_at", { ascending: false });
+      .order("updated_at", { ascending: false });
 
     if (!userSessions || num > userSessions.length) {
       await sendTelegramMessage(chatId, `No existe la sesion ${num}. Usa /sessions para ver la lista.`);
@@ -338,7 +340,7 @@ export async function POST(request: Request) {
     const target = userSessions[num - 1];
     await db
       .from("agent_sessions")
-      .update({ last_used_at: new Date().toISOString() })
+      .update({ updated_at: new Date().toISOString() })
       .eq("id", target.id);
 
     await sendTelegramMessage(chatId, `Cambiado a sesion ${num}.`);
@@ -352,7 +354,7 @@ export async function POST(request: Request) {
       .eq("user_id", userId)
       .eq("channel", "telegram")
       .eq("status", "active")
-      .order("last_used_at", { ascending: false })
+      .order("updated_at", { ascending: false })
       .limit(1)
       .single();
 
@@ -363,6 +365,11 @@ export async function POST(request: Request) {
 
     await db.from("agent_messages").delete().eq("session_id", currentSession.id);
     await db.from("tool_calls").delete().eq("session_id", currentSession.id);
+    try {
+      await deleteSessionCheckpoint(currentSession.id as string);
+    } catch (e) {
+      console.error("Telegram /clear: deleteSessionCheckpoint failed:", e);
+    }
 
     await sendTelegramMessage(chatId, "Sesion limpiada. El agente no recuerda mensajes anteriores.");
     return NextResponse.json({ ok: true });
@@ -376,7 +383,7 @@ export async function POST(request: Request) {
     .eq("user_id", userId)
     .eq("channel", "telegram")
     .eq("status", "active")
-    .order("last_used_at", { ascending: false })
+    .order("updated_at", { ascending: false })
     .limit(1)
     .single()
     .then((r) => r.data);
@@ -390,7 +397,6 @@ export async function POST(request: Request) {
         status: "active",
         budget_tokens_used: 0,
         budget_tokens_limit: 100000,
-        last_used_at: new Date().toISOString(),
       })
       .select()
       .single();
@@ -404,7 +410,7 @@ export async function POST(request: Request) {
 
   await db
     .from("agent_sessions")
-    .update({ last_used_at: new Date().toISOString() })
+    .update({ updated_at: new Date().toISOString() })
     .eq("id", session.id);
 
   try {

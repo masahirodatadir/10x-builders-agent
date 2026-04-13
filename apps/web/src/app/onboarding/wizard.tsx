@@ -72,6 +72,8 @@ export function OnboardingWizard({ userId, initialProfile, initialToolSettings }
       "github_list_issues",
       "github_create_issue",
       "github_create_repo",
+      "notion_search",
+      "notion_get_page_text",
       "bash",
       "read_file",
       "write_file",

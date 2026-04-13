@@ -7,6 +7,7 @@ import {
   createTaskRun,
   completeTaskRun,
   failTaskRun,
+  loadNotionTokenBundle,
 } from "@agents/db";
 import { runAgent } from "@agents/agent";
 import { notifyUserViaTelegram } from "@/lib/telegram/send";
@@ -60,6 +61,8 @@ async function buildAgentContextForTask(
     }
   }
 
+  const notionTokens = await loadNotionTokenBundle(db, userId);
+
   return {
     userId,
     sessionId,
@@ -83,6 +86,7 @@ async function buildAgentContextForTask(
       created_at: i.created_at as string,
     })) as UserIntegration[],
     githubToken,
+    notionTokens: notionTokens ?? undefined,
   };
 }
 
@@ -117,7 +121,6 @@ async function getOrCreateCronSession(
       status: "active",
       budget_tokens_used: 0,
       budget_tokens_limit: 100000,
-      last_used_at: new Date().toISOString(),
     })
     .select("id")
     .single();
