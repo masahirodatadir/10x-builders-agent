@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+import { withSentryConfig } from "@sentry/nextjs";
 
 const extraAllowedDevOrigins =
   process.env.NEXT_ALLOWED_DEV_ORIGINS?.split(",")
@@ -17,4 +18,22 @@ const nextConfig: NextConfig = {
   allowedDevOrigins,
 };
 
-export default nextConfig;
+export default withSentryConfig(nextConfig, {
+  org: "ricardo-masahiro-solis",
+  project: "lab10-agent",
+
+  // Only print logs for uploading source maps in CI
+  silent: !process.env.CI,
+
+  // Upload a larger set of source maps for prettier stack traces
+  widenClientFileUpload: true,
+
+  // Route browser requests to Sentry through Next.js to reduce ad-blocker issues.
+  tunnelRoute: "/monitoring",
+
+  automaticVercelMonitors: true,
+
+  bundleSizeOptimizations: {
+    excludeDebugStatements: true,
+  },
+});
