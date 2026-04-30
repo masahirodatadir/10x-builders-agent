@@ -34,18 +34,56 @@ export const TOOL_SCHEMAS = {
       .describe("Notion page id (UUID), from notion_search or a Notion URL."),
   }),
   read_file: z.object({
-    path: z.string().describe("Absolute path or path relative to the server process working directory."),
-    offset: z.number().int().min(1).optional().describe("1-based line number to start reading from. Defaults to 1."),
-    limit: z.number().int().min(1).optional().describe("Maximum number of lines to return starting at offset."),
+    path: z
+      .string()
+      .describe(
+        "Host filesystem on the agent: absolute path or path relative to process.cwd() of the Node server. Not necessarily the same cwd as the bash tool when BASH_TOOL_CWD is set."
+      ),
+    offset: z
+      .number()
+      .int()
+      .min(1)
+      .optional()
+      .describe("1-based line number of the first line to return. Defaults to 1."),
+    limit: z
+      .number()
+      .int()
+      .min(1)
+      .optional()
+      .describe(
+        "Max lines to return from offset; server also enforces an internal max — omitting limit does not mean unlimited lines."
+      ),
   }),
   write_file: z.object({
-    path: z.string().describe("Absolute path or path relative to the server process working directory. The file must NOT exist yet."),
-    content: z.string().max(500_000).describe("Full UTF-8 content to write into the new file."),
+    path: z
+      .string()
+      .describe(
+        "Absolute or relative to server process cwd. Target file must not exist yet; tool fails with FILE_EXISTS if it does."
+      ),
+    content: z
+      .string()
+      .max(500_000)
+      .describe(
+        "Full UTF-8 body for the new file. Schema max length may be below disk limits."
+      ),
   }),
   edit_file: z.object({
-    path: z.string().describe("Absolute path or path relative to the server process working directory. The file must already exist."),
-    old_string: z.string().describe("Literal substring to find. Must appear exactly once in the file."),
-    new_string: z.string().describe("Literal string that replaces the single occurrence of old_string."),
+    path: z
+      .string()
+      .describe(
+        "Absolute or relative to server process cwd. File must already exist."
+      ),
+    old_string: z
+      .string()
+      .min(1)
+      .describe(
+        "Non-empty literal substring; must match file bytes exactly once (whitespace and CRLF vs LF). Prefer copy-paste from read_file."
+      ),
+    new_string: z
+      .string()
+      .describe(
+        "Literal replacement for that single occurrence; may be empty to delete the matched span. Not regex."
+      ),
   }),
   bash: z.object({
     terminal: z.string().describe("Terminal identifier for correlation and logging"),

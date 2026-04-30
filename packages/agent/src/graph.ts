@@ -1,6 +1,5 @@
 import {
   StateGraph,
-  Annotation,
   interrupt,
   Command,
   INTERRUPT,
@@ -29,16 +28,9 @@ import {
   findExistingPendingToolCall,
 } from "@agents/db";
 import { getCheckpointer } from "./checkpointer";
-
-const GraphState = Annotation.Root({
-  messages: Annotation<BaseMessage[]>({
-    reducer: (prev, next) => [...prev, ...next],
-    default: () => [],
-  }),
-  sessionId: Annotation<string>(),
-  userId: Annotation<string>(),
-  systemPrompt: Annotation<string>(),
-});
+import { GraphState } from "./state";
+import { compactionNode } from "./nodes/compaction_node";
+import { createMemoryInjectionNode } from "./nodes/memory_injection_node";
 
 export interface AgentInput {
   message?: string;
@@ -280,14 +272,18 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
   }
 
   const graph = new StateGraph(GraphState)
+    .addNode("memory_injection", createMemoryInjectionNode(db))
+    .addNode("compaction", compactionNode)
     .addNode("agent", agentNode)
     .addNode("tools", toolExecutorNode)
-    .addEdge("__start__", "agent")
+    .addEdge("__start__", "memory_injection")
+    .addEdge("memory_injection", "compaction")
+    .addEdge("compaction", "agent")
     .addConditionalEdges("agent", shouldContinue, {
       tools: "tools",
       end: "__end__",
     })
-    .addEdge("tools", "agent");
+    .addEdge("tools", "compaction");
 
   const checkpointer = await getCheckpointer();
   const app = graph.compile({ checkpointer });
@@ -351,7 +347,13 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
     await addMessage(db, sessionId, "user", message!);
 
     finalState = await app.invoke(
-      { messages: [new HumanMessage(message!)], sessionId, userId, systemPrompt },
+      {
+        messages: [new HumanMessage(message!)],
+        sessionId,
+        userId,
+        userInput: message!,
+        systemPrompt,
+      },
       config
     );
   }

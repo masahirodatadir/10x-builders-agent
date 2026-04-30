@@ -136,55 +136,178 @@ export const TOOL_CATALOG: ToolDefinition[] = [
   {
     id: "read_file",
     name: "read_file",
-    description:
-      "Reads an existing text file from the server filesystem. Use this when you need to inspect source code, config, logs, or any UTF-8 text without changing it. Do NOT use this to create or modify files; use write_file or edit_file instead. Do NOT use this if you only need a directory listing — this tool does not list folders. Parameters: `path` can be absolute or relative (resolved from the server process working directory, same as the bash tool). Optional `offset` is the 1-based start line number (first line is 1). Optional `limit` is the maximum number of lines to return starting at `offset`. If both are omitted, the full file is returned up to a server-enforced maximum. Binary files are not supported. Process: resolve path → read from disk → slice by line range if requested → return JSON. Success: { ok: true, path, content, startLine, endLine, totalLines }. Failure: { ok: false, path, error: { code, message } } with explicit reason (e.g. file not found, file too large, tool disabled).",
+    description: `Read-only access to one existing regular file as UTF-8 text on the agent host.
+
+When to use:
+- You need the current contents of a file you will reason about or cite (source, config, logs, markdown, etc.).
+- You want a slice of the file by line range (large files / long logs).
+
+When NOT to use (choose another tool instead):
+- Creating a file or changing bytes on disk → use write_file (new file only) or edit_file (single literal replacement in an existing file), or bash if appropriate.
+- Listing directory contents or discovering filenames → this tool does not list folders; use bash or another listing mechanism.
+- Non-text or binary files → not supported; output may be corrupted or misleading.
+- File larger than the server limit (currently 2 MiB on disk) → the tool fails with FILE_TOO_LARGE even if offset/limit are set; use bash (e.g. head) or split the workflow.
+
+Parameters:
+- path: string, required. Absolute path, or path relative to the Node process working directory (process.cwd()). Independent of BASH_TOOL_CWD when the bash tool uses a different cwd.
+- offset: optional positive integer, default 1. Line number of the first line to return, 1-based (first line of the file is line 1).
+- limit: optional positive integer. Maximum number of lines to return starting at offset. If omitted, the server applies an internal maximum line cap (do not assume an entire unlimited file).
+
+Process (server):
+1) If file tools are disabled → fail TOOL_DISABLED.
+2) Resolve path to an absolute normalized path.
+3) stat the path → if missing → NOT_FOUND; if directory → IS_DIRECTORY; if file size > byte limit → FILE_TOO_LARGE.
+4) Read full file as UTF-8, split into lines.
+5) If offset is outside 1..totalLines → OFFSET_OUT_OF_RANGE.
+6) Return the requested line window joined with newline characters.
+
+Successful JSON shape:
+{ "ok": true, "tool": "read_file", "path": "<resolved>", "content": "<text slice>", "startLine": <number>, "endLine": <number>, "totalLines": <number> }
+
+Failed JSON shape:
+{ "ok": false, "tool": "read_file", "path": "<string>", "error": { "code": "<string>", "message": "<human-readable explanation>" } }
+
+Common error codes: TOOL_DISABLED, NOT_FOUND, IS_DIRECTORY, FILE_TOO_LARGE, READ_ERROR, OFFSET_OUT_OF_RANGE, ACCESS_DENIED, STAT_ERROR.`,
     risk: "low",
     parameters_schema: {
       type: "object",
       properties: {
-        path: { type: "string", description: "Absolute path or path relative to the server process working directory." },
-        offset: { type: "number", description: "1-based line number to start reading from. Defaults to 1." },
-        limit: { type: "number", description: "Maximum number of lines to return starting at offset." },
+        path: {
+          type: "string",
+          description:
+            "Host filesystem: absolute path or path relative to the server process working directory (Node cwd).",
+        },
+        offset: {
+          type: "number",
+          description: "1-based line number to start reading from. Defaults to 1.",
+        },
+        limit: {
+          type: "number",
+          description: "Maximum number of lines to return starting at offset; server caps total lines returned.",
+        },
       },
       required: ["path"],
     },
     displayName: "Leer archivo",
-    displayDescription: "Lee un archivo de texto existente dentro del workspace (opcionalmente por rango de líneas). No crea ni modifica archivos.",
+    displayDescription:
+      "Lee un archivo de texto existente en el servidor del agente (UTF-8), sin modificarlo. Permite leer por rango de líneas (offset desde 1, limit). No lista carpetas ni crea archivos. Archivos mayores al límite del servidor fallan aunque pidas pocas líneas.",
   },
   {
     id: "write_file",
     name: "write_file",
-    description:
-      "Creates a NEW file with the given UTF-8 content. Use this ONLY when the file does not exist yet. If the file already exists this tool FAILS by design — use edit_file to change existing files. Do not use this to overwrite or patch. Parameters: `path` can be absolute or relative (resolved from the server process working directory, same as the bash tool); `content` is the full file body to write. Process: resolve path → verify file does not already exist → create parent directories → write atomically → return JSON. Success: { ok: true, path, bytesWritten }. Failure: { ok: false, path, error: { code, message } } e.g. file already exists, permission denied, or tool disabled. Human approval required before execution.",
+    description: `Create exactly one new regular file on the agent host with the full UTF-8 body you provide. This is a create-only operation.
+
+When to use:
+- The target path must not exist yet and you want the entire initial contents in one write (new module, new config file, new doc, etc.).
+
+When NOT to use:
+- The file already exists at that path (any non-zero existing file) → the tool fails by design with FILE_EXISTS; use edit_file for in-place text edits, or another strategy if you need truncation/replacement of the whole file.
+- You only need to change part of an existing file → use edit_file.
+- You need to append to a log or stream bytes → not supported as append mode; use bash or extend the product.
+- Parent path is wrong "on purpose" to overwrite something → still fails if the leaf file exists.
+
+Parameters:
+- path: string, required. Absolute or relative to the server process working directory. The final path must not already exist as a file.
+- content: string, required. Complete file body after creation. Encoding is UTF-8. The API layer may enforce a maximum length smaller than disk limits.
+
+Process (server):
+1) If file tools are disabled → fail TOOL_DISABLED.
+2) Resolve path.
+3) If a file already exists at resolved path → FILE_EXISTS (includes race where another process creates it first).
+4) Create missing parent directories.
+5) Create the file with exclusive create semantics, write content, close.
+
+Successful JSON shape:
+{ "ok": true, "tool": "write_file", "path": "<resolved>", "bytesWritten": <number> }
+
+Failed JSON shape:
+{ "ok": false, "tool": "write_file", "path": "<string>", "error": { "code": "<string>", "message": "<...>" } }
+
+Common error codes: TOOL_DISABLED, FILE_EXISTS, MKDIR_ERROR, WRITE_ERROR.
+
+Human-in-the-loop: this tool is high-risk in the product; the user may need to approve before execution.`,
     risk: "high",
     parameters_schema: {
       type: "object",
       properties: {
-        path: { type: "string", description: "Absolute path or path relative to the server process working directory. The file must not exist yet." },
-        content: { type: "string", description: "Full UTF-8 content to write into the new file." },
+        path: {
+          type: "string",
+          description:
+            "Must not exist yet; fails with FILE_EXISTS if it does. Absolute or relative to server process cwd.",
+        },
+        content: {
+          type: "string",
+          description: "Full UTF-8 body for the new file; request schema may cap length below disk limits.",
+        },
       },
       required: ["path", "content"],
     },
     displayName: "Crear archivo",
-    displayDescription: "Crea un archivo nuevo con contenido completo. Falla si el archivo ya existe; para cambios usa editar archivo.",
+    displayDescription:
+      "Crea un archivo nuevo en el servidor del agente con el contenido completo. Si el archivo ya existe, la herramienta falla a propósito; para cambiar un archivo existente usa editar archivo.",
   },
   {
     id: "edit_file",
     name: "edit_file",
-    description:
-      "Edits an EXISTING UTF-8 text file by replacing EXACTLY ONE occurrence of old_string with new_string. Use this when you need to update part of a file without rewriting the whole file. Do NOT use this to create a new file (use write_file). If old_string might match zero or multiple places, add more surrounding context to make it unique. old_string and new_string are literal substrings, not regex. Line endings must match those in the file. Parameters: `path` can be absolute or relative (resolved from the server process working directory, same as the bash tool). Process: resolve path → read file → count occurrences of old_string → if not exactly 1, fail with a clear message (0 found vs N found) → apply replacement → write safely → return JSON. Success: { ok: true, path, replacements: 1 }. Failure: { ok: false, path, error: { code, message } } e.g. file not found, old_string found 0 times, old_string found N>1 times, permission denied, or tool disabled. Human approval required before execution.",
+    description: `Modify one existing UTF-8 text file on the agent host by replacing exactly one literal occurrence of old_string with new_string. Not regex. Not multi-file.
+
+When to use:
+- The file already exists and you need a deterministic, reviewable change to a unique substring (small patch style).
+
+When NOT to use:
+- Creating a new file → use write_file.
+- old_string might match 0 times or more than 1 time → fix your old_string (add surrounding lines / unique context) until it is unique; otherwise the tool fails with OLD_STRING_NOT_FOUND or OLD_STRING_AMBIGUOUS.
+- old_string is empty → do not use; an empty needle is ambiguous and will not match the intended "replace nothing" semantics in a useful way.
+- Changing binary files or encoding-sensitive bytes → not supported.
+- Global rewrites or regex-based refactors → not supported; use bash or a dedicated refactor path.
+
+Parameters:
+- path: string, required. Absolute or relative to the server process working directory. Target must be an existing readable/writable file.
+- old_string: string, required, non-empty. Must match the file bytes exactly once, including spaces, tabs, and newline style (CRLF vs LF). Copy-paste from read_file output when possible.
+- new_string: string, allowed to be empty (deletes the matched region only). Literal replacement, not interpreted as regex.
+
+Process (server):
+1) If file tools are disabled → fail TOOL_DISABLED.
+2) Resolve path; read full file as UTF-8.
+3) Count non-overlapping literal occurrences of old_string.
+   - 0 occurrences → OLD_STRING_NOT_FOUND.
+   - >1 occurrences → OLD_STRING_AMBIGUOUS.
+   - exactly 1 → build updated text by replacing that single occurrence.
+4) Write updated content safely (temporary file then rename to original path).
+
+Successful JSON shape:
+{ "ok": true, "tool": "edit_file", "path": "<resolved>", "replacements": 1 }
+
+Failed JSON shape:
+{ "ok": false, "tool": "edit_file", "path": "<string>", "error": { "code": "<string>", "message": "<...>" } }
+
+Common error codes: TOOL_DISABLED, NOT_FOUND, OLD_STRING_NOT_FOUND, OLD_STRING_AMBIGUOUS, WRITE_ERROR, INVALID_OLD_STRING, ACCESS_DENIED, READ_ERROR.
+
+Human-in-the-loop: high-risk; user approval may be required before execution.`,
     risk: "high",
     parameters_schema: {
       type: "object",
       properties: {
-        path: { type: "string", description: "Absolute path or path relative to the server process working directory. The file must already exist." },
-        old_string: { type: "string", description: "Literal substring to find. Must appear exactly once in the file." },
-        new_string: { type: "string", description: "Literal string that replaces the single occurrence of old_string." },
+        path: {
+          type: "string",
+          description:
+            "Existing file: absolute or relative to server process cwd.",
+        },
+        old_string: {
+          type: "string",
+          description:
+            "Non-empty literal; must occur exactly once (whitespace and line endings must match the file).",
+        },
+        new_string: {
+          type: "string",
+          description: "Literal replacement for that single occurrence; may be empty to delete the matched span.",
+        },
       },
       required: ["path", "old_string", "new_string"],
     },
     displayName: "Editar archivo",
-    displayDescription: "Reemplaza una única aparición de un fragmento en un archivo existente. No crea archivos nuevos.",
+    displayDescription:
+      "En un archivo existente, reemplaza una sola vez un fragmento literal (old_string) por new_string. Debe haber exactamente una coincidencia; si hay 0 o varias, falla con mensaje claro. No crea archivos nuevos.",
   },
   {
     id: "schedule_task",

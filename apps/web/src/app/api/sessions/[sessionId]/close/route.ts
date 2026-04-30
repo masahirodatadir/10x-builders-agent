@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { createServerClient, clearSessionMessages } from "@agents/db";
-import { deleteSessionCheckpoint } from "@agents/agent";
+import { createServerClient } from "@agents/db";
 import { flushSessionMemoriesSafely } from "../../memory";
 
 export async function POST(
@@ -18,21 +17,30 @@ export async function POST(
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const { data: session } = await supabase
+  const db = createServerClient();
+  const { data: session } = await db
     .from("agent_sessions")
     .select("id")
     .eq("id", sessionId)
     .eq("user_id", user.id)
+    .eq("status", "active")
     .single();
 
   if (!session) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  const db = createServerClient();
-  await flushSessionMemoriesSafely(db, user.id, sessionId, "web clear");
-  await clearSessionMessages(db, sessionId);
-  await deleteSessionCheckpoint(sessionId);
+  await flushSessionMemoriesSafely(db, user.id, sessionId, "web close");
+
+  const { error } = await db
+    .from("agent_sessions")
+    .update({ status: "closed", updated_at: new Date().toISOString() })
+    .eq("id", sessionId)
+    .eq("user_id", user.id);
+
+  if (error) {
+    return NextResponse.json({ error: "Failed to close session" }, { status: 500 });
+  }
 
   return NextResponse.json({ ok: true });
 }

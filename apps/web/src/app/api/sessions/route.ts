@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createServerClient, touchSession } from "@agents/db";
+import { flushSessionMemoriesSafely } from "./memory";
 
 export async function GET() {
   const supabase = await createClient();
@@ -22,7 +23,7 @@ export async function GET() {
   return NextResponse.json({ sessions: sessions ?? [] });
 }
 
-export async function POST() {
+export async function POST(request: Request) {
   const supabase = await createClient();
   const {
     data: { user },
@@ -32,6 +33,23 @@ export async function POST() {
   }
 
   const db = createServerClient();
+  const body = await request.json().catch(() => ({}));
+  const fromSessionId = body?.fromSessionId;
+
+  if (fromSessionId && typeof fromSessionId === "string") {
+    const { data: sourceSession } = await db
+      .from("agent_sessions")
+      .select("id")
+      .eq("id", fromSessionId)
+      .eq("user_id", user.id)
+      .eq("channel", "web")
+      .eq("status", "active")
+      .single();
+
+    if (sourceSession) {
+      await flushSessionMemoriesSafely(db, user.id, fromSessionId, "web new session");
+    }
+  }
 
   const { data: session, error } = await db
     .from("agent_sessions")

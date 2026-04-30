@@ -5,7 +5,7 @@ import {
   getPendingToolCall,
   loadNotionTokenBundle,
 } from "@agents/db";
-import { runAgent, deleteSessionCheckpoint } from "@agents/agent";
+import { runAgent, deleteSessionCheckpoint, flushSessionMemories } from "@agents/agent";
 import { sendTelegramMessage } from "@/lib/telegram/send";
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN ?? "";
@@ -43,6 +43,24 @@ async function answerCallbackQuery(callbackQueryId: string, text: string) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ callback_query_id: callbackQueryId, text }),
   });
+}
+
+async function flushTelegramSessionMemoriesSafely(
+  db: ReturnType<typeof createServerClient>,
+  userId: string,
+  sessionId: string,
+  context: string
+): Promise<void> {
+  try {
+    const result = await flushSessionMemories({ db, userId, sessionId });
+    console.info(`Telegram memory flush completed during ${context}:`, {
+      sessionId,
+      extracted: result.extracted,
+      inserted: result.inserted,
+    });
+  } catch (error) {
+    console.error(`Telegram memory flush failed during ${context}:`, error);
+  }
 }
 
 async function resolveGitHubToken(
@@ -296,6 +314,25 @@ export async function POST(request: Request) {
   }
 
   if (command === "/new") {
+    const { data: currentSession } = await db
+      .from("agent_sessions")
+      .select("id")
+      .eq("user_id", userId)
+      .eq("channel", "telegram")
+      .eq("status", "active")
+      .order("updated_at", { ascending: false })
+      .limit(1)
+      .single();
+
+    if (currentSession) {
+      await flushTelegramSessionMemoriesSafely(
+        db,
+        userId,
+        currentSession.id as string,
+        "telegram new session"
+      );
+    }
+
     const { data: newSession } = await db
       .from("agent_sessions")
       .insert({
@@ -338,6 +375,16 @@ export async function POST(request: Request) {
     }
 
     const target = userSessions[num - 1];
+    const current = userSessions[0];
+    if (current?.id && current.id !== target.id) {
+      await flushTelegramSessionMemoriesSafely(
+        db,
+        userId,
+        current.id as string,
+        "telegram switch"
+      );
+    }
+
     await db
       .from("agent_sessions")
       .update({ updated_at: new Date().toISOString() })
@@ -362,6 +409,13 @@ export async function POST(request: Request) {
       await sendTelegramMessage(chatId, "No tienes una sesion activa. Usa /new para crear una.");
       return NextResponse.json({ ok: true });
     }
+
+    await flushTelegramSessionMemoriesSafely(
+      db,
+      userId,
+      currentSession.id as string,
+      "telegram clear"
+    );
 
     await db.from("agent_messages").delete().eq("session_id", currentSession.id);
     await db.from("tool_calls").delete().eq("session_id", currentSession.id);

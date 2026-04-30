@@ -4,13 +4,17 @@
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "scripts": {
-    "type-check": "tsc --noEmit"
+    "type-check": "tsc --noEmit",
+    "apply-scheduled-tasks-migration": "node ./scripts/apply-scheduled-tasks-migration.cjs",
+    "backfill-schedule-task-tool-setting": "node ./scripts/backfill-schedule-task-tool-setting.cjs",
+    "verify-scheduled-tasks-ops": "node ./scripts/verify-scheduled-tasks-ops.cjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2",
     "@agents/types": "*"
   },
   "devDependencies": {
+    "pg": "^8.13.1",
     "typescript": "^5"
   }
 }

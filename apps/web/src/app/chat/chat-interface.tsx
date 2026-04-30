@@ -112,6 +112,12 @@ export function ChatInterface({
   async function handleSwitchSession(sessionId: string) {
     if (sessionId === activeSessionId) return;
 
+    await fetch("/api/sessions/switch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fromSessionId: activeSessionId, toSessionId: sessionId }),
+    });
+
     const { data: rawMsgs } = await supabase
       .from("agent_messages")
       .select("role, content, created_at, structured_payload")
@@ -144,7 +150,11 @@ export function ChatInterface({
   }
 
   async function handleNewSession() {
-    const res = await fetch("/api/sessions", { method: "POST" });
+    const res = await fetch("/api/sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fromSessionId: activeSessionId }),
+    });
     const { session } = await res.json();
     if (session) {
       setSessionList((prev) => [session, ...prev]);

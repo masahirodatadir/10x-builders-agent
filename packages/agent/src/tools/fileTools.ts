@@ -1,4 +1,14 @@
-import { access, constants, mkdir, open, readFile, rename, stat, writeFile } from "node:fs/promises";
+import {
+  access,
+  constants,
+  mkdir,
+  open,
+  readFile,
+  rename,
+  stat,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { dirname, isAbsolute, normalize, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
 
@@ -6,13 +16,13 @@ const MAX_READ_LINES = 2_000;
 const MAX_CONTENT_BYTES = 2 * 1024 * 1024; // 2 MB
 
 // ---------------------------------------------------------------------------
-// Path resolution — no root confinement, mirrors bash tool behaviour
+// Path resolution — no root confinement; relative paths use process.cwd()
 // ---------------------------------------------------------------------------
 
 /**
  * Resolves `userPath` to an absolute path.
  * - Absolute paths are used as-is.
- * - Relative paths are resolved against `process.cwd()` (same as the bash tool).
+ * - Relative paths are resolved against `process.cwd()` (not BASH_TOOL_CWD).
  * Returns `{ ok: false }` only when the tool is disabled via env flag.
  */
 function safePath(
@@ -70,8 +80,27 @@ export async function executeReadFile(input: ReadFileInput): Promise<ReadFileRes
   let fileStat: Awaited<ReturnType<typeof stat>>;
   try {
     fileStat = await stat(resolved);
-  } catch {
-    return { ok: false, tool: "read_file", path: resolved, error: { code: "NOT_FOUND", message: `File not found: ${resolved}` } };
+  } catch (err) {
+    const e = err as NodeJS.ErrnoException;
+    if (e.code === "ENOENT") {
+      return {
+        ok: false,
+        tool: "read_file",
+        path: resolved,
+        error: { code: "NOT_FOUND", message: `File not found: ${resolved}` },
+      };
+    }
+    const code =
+      e.code === "EACCES" || e.code === "EPERM" ? "ACCESS_DENIED" : "STAT_ERROR";
+    return {
+      ok: false,
+      tool: "read_file",
+      path: resolved,
+      error: {
+        code,
+        message: `Cannot access path ${resolved}: ${formatFsError(err)}`,
+      },
+    };
   }
 
   if (fileStat.isDirectory()) {
@@ -85,7 +114,7 @@ export async function executeReadFile(input: ReadFileInput): Promise<ReadFileRes
       path: resolved,
       error: {
         code: "FILE_TOO_LARGE",
-        message: `File is ${fileStat.size} bytes, which exceeds the ${MAX_CONTENT_BYTES / 1024 / 1024} MB limit. Use offset and limit to read a specific line range.`,
+        message: `File is ${fileStat.size} bytes (server limit ${MAX_CONTENT_BYTES} bytes, ${MAX_CONTENT_BYTES / 1024 / 1024} MiB). This tool loads the whole file before applying offset/limit, so those parameters do not bypass the size cap. For larger files use the bash tool (e.g. head -n or sed) or split the workflow.`,
       },
     };
   }
@@ -94,7 +123,19 @@ export async function executeReadFile(input: ReadFileInput): Promise<ReadFileRes
   try {
     raw = await readFile(resolved, "utf8");
   } catch (err) {
-    return { ok: false, tool: "read_file", path: resolved, error: { code: "READ_ERROR", message: String(err) } };
+    const e = err as NodeJS.ErrnoException;
+    const code =
+      e.code === "EACCES" || e.code === "EPERM"
+        ? "ACCESS_DENIED"
+        : e.code === "ENOENT"
+          ? "NOT_FOUND"
+          : "READ_ERROR";
+    return {
+      ok: false,
+      tool: "read_file",
+      path: resolved,
+      error: { code, message: `Could not read file ${resolved}: ${formatFsError(err)}` },
+    };
   }
 
   const allLines = raw.split("\n");
@@ -184,7 +225,15 @@ export async function executeWriteFile(input: WriteFileInput): Promise<WriteFile
   try {
     await mkdir(dirname(resolved), { recursive: true });
   } catch (err) {
-    return { ok: false, tool: "write_file", path: resolved, error: { code: "MKDIR_ERROR", message: `Could not create parent directories: ${String(err)}` } };
+    return {
+      ok: false,
+      tool: "write_file",
+      path: resolved,
+      error: {
+        code: "MKDIR_ERROR",
+        message: `Could not create parent directories: ${formatFsError(err)}`,
+      },
+    };
   }
 
   // Write using 'wx' flag to fail if another process races and creates the file
@@ -206,7 +255,12 @@ export async function executeWriteFile(input: WriteFileInput): Promise<WriteFile
         error: { code: "FILE_EXISTS", message: `File already exists: ${resolved}. Use edit_file to modify an existing file.` },
       };
     }
-    return { ok: false, tool: "write_file", path: resolved, error: { code: "WRITE_ERROR", message: String(err) } };
+    return {
+      ok: false,
+      tool: "write_file",
+      path: resolved,
+      error: { code: "WRITE_ERROR", message: formatFsError(err) },
+    };
   }
 
   return { ok: true, tool: "write_file", path: resolved, bytesWritten: bytes.length };
@@ -246,11 +300,43 @@ export async function executeEditFile(input: EditFileInput): Promise<EditFileRes
 
   const { resolved } = safe;
 
+  if (input.old_string.length === 0) {
+    return {
+      ok: false,
+      tool: "edit_file",
+      path: resolved,
+      error: {
+        code: "INVALID_OLD_STRING",
+        message:
+          "old_string must be non-empty. Provide the exact snippet to replace exactly once.",
+      },
+    };
+  }
+
   let original: string;
   try {
     original = await readFile(resolved, "utf8");
-  } catch {
-    return { ok: false, tool: "edit_file", path: resolved, error: { code: "NOT_FOUND", message: `File not found: ${resolved}` } };
+  } catch (err) {
+    const e = err as NodeJS.ErrnoException;
+    if (e.code === "ENOENT") {
+      return {
+        ok: false,
+        tool: "edit_file",
+        path: resolved,
+        error: { code: "NOT_FOUND", message: `File not found: ${resolved}` },
+      };
+    }
+    const code =
+      e.code === "EACCES" || e.code === "EPERM" ? "ACCESS_DENIED" : "READ_ERROR";
+    return {
+      ok: false,
+      tool: "edit_file",
+      path: resolved,
+      error: {
+        code,
+        message: `Could not read file ${resolved}: ${formatFsError(err)}`,
+      },
+    };
   }
 
   // Count occurrences without regex to support arbitrary strings
@@ -288,9 +374,17 @@ export async function executeEditFile(input: EditFileInput): Promise<EditFileRes
     await writeFile(tmp, updated, "utf8");
     await rename(tmp, resolved);
   } catch (err) {
-    // Best-effort cleanup of temp file
-    try { await access(tmp); /* exists */ await writeFile(tmp, ""); } catch { /* ignore */ }
-    return { ok: false, tool: "edit_file", path: resolved, error: { code: "WRITE_ERROR", message: String(err) } };
+    try {
+      await unlink(tmp);
+    } catch {
+      /* ignore */
+    }
+    return {
+      ok: false,
+      tool: "edit_file",
+      path: resolved,
+      error: { code: "WRITE_ERROR", message: formatFsError(err) },
+    };
   }
 
   return { ok: true, tool: "edit_file", path: resolved, replacements: 1 };
@@ -299,6 +393,16 @@ export async function executeEditFile(input: EditFileInput): Promise<EditFileRes
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+function formatFsError(err: unknown): string {
+  const e = err as NodeJS.ErrnoException;
+  if (!e || typeof e !== "object") return String(err);
+  const parts: string[] = [];
+  if (e.message) parts.push(e.message);
+  if (e.code) parts.push(`code=${e.code}`);
+  if (typeof e.errno === "number") parts.push(`errno=${e.errno}`);
+  return parts.length > 0 ? parts.join("; ") : String(err);
+}
 
 function countOccurrences(haystack: string, needle: string): number {
   if (needle.length === 0) return 0;
