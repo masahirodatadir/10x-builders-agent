@@ -14,11 +14,19 @@ const allowedDevOrigins = [
 
 const nextConfig: NextConfig = {
   transpilePackages: ["@agents/agent", "@agents/db", "@agents/types"],
-  serverExternalPackages: ["@langchain/core", "@langchain/langgraph", "@langchain/openai"],
+  serverExternalPackages: [
+    "@langchain/core",
+    "@langchain/langgraph",
+    "@langchain/openai",
+    "@langfuse/langchain",
+    "@langfuse/otel",
+    "@langfuse/tracing",
+    "@opentelemetry/sdk-trace-node",
+  ],
   allowedDevOrigins,
 };
 
-export default withSentryConfig(nextConfig, {
+const sentryConfig = {
   org: "ricardo-masahiro-solis",
   project: "lab10-agent",
 
@@ -36,4 +44,8 @@ export default withSentryConfig(nextConfig, {
   bundleSizeOptimizations: {
     excludeDebugStatements: true,
   },
-});
+};
+
+export default process.env.NODE_ENV === "production"
+  ? withSentryConfig(nextConfig, sentryConfig)
+  : nextConfig;

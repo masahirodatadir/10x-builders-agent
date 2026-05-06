@@ -4,6 +4,7 @@ import { insertMemories, type DbClient } from "@agents/db";
 import type { AgentMessage, MemoryType } from "@agents/types";
 import { z } from "zod";
 import { createMemoryEmbeddings } from "./embeddings";
+import { createLangfuseCallbackHandler, flushLangfuseTracing } from "./langfuse";
 
 const HAIKU_MODEL = "anthropic/claude-3.5-haiku";
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
@@ -168,10 +169,28 @@ export async function flushSessionMemories({
     return { extracted: 0, inserted: 0 };
   }
 
-  const response = await createMemoryExtractionModel().invoke([
-    new SystemMessage(MEMORY_EXTRACTION_PROMPT),
-    new HumanMessage(serializedHistory),
-  ]);
+  const langfuseHandler = createLangfuseCallbackHandler({
+    userId,
+    sessionId,
+    tags: ["memory-flush"],
+    traceMetadata: {
+      operation: "memory_flush",
+    },
+  });
+
+  const response = await createMemoryExtractionModel().invoke(
+    [
+      new SystemMessage(MEMORY_EXTRACTION_PROMPT),
+      new HumanMessage(serializedHistory),
+    ],
+    langfuseHandler
+      ? {
+          callbacks: [langfuseHandler],
+          runName: "memory_extraction",
+        }
+      : undefined
+  );
+  await flushLangfuseTracing();
 
   const extracted = normalizeExtractedMemories(
     parseExtractionJson(messageContentToString(response.content))

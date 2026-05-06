@@ -11,6 +11,7 @@ import {
   ToolMessage,
   type BaseMessage,
 } from "@langchain/core/messages";
+import type { RunnableConfig } from "@langchain/core/runnables";
 import type { DbClient, NotionStoredTokens } from "@agents/db";
 import type { UserToolSetting, UserIntegration, PendingConfirmation } from "@agents/types";
 import {
@@ -31,6 +32,11 @@ import { getCheckpointer } from "./checkpointer";
 import { GraphState } from "./state";
 import { compactionNode } from "./nodes/compaction_node";
 import { createMemoryInjectionNode } from "./nodes/memory_injection_node";
+import {
+  createLangfuseCallbackHandler,
+  flushLangfuseTracing,
+  recordLangfuseTrace,
+} from "./langfuse";
 
 export interface AgentInput {
   message?: string;
@@ -126,6 +132,15 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
   const lcTools = buildLangChainTools(toolCtx);
 
   const modelWithTools = lcTools.length > 0 ? model.bindTools(lcTools) : model;
+  const langfuseHandler = createLangfuseCallbackHandler({
+    userId,
+    sessionId,
+    tags: [bypassConfirmation ? "unattended" : "interactive"],
+    traceMetadata: {
+      enabledToolCount: enabledTools.filter((tool) => tool.enabled).length,
+      integrationProviders: integrations.map((integration) => integration.provider),
+    },
+  });
 
   const toolCallNames: string[] = [];
 
@@ -144,10 +159,13 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
     const systemPromptWithDate = `${state.systemPrompt}\n\nFecha y hora actual: ${currentDate} (hora Colombia).`;
 
     // Inject SystemMessage fresh so it is never accumulated in state.messages.
-    const response = await modelWithTools.invoke([
-      new SystemMessage(systemPromptWithDate),
-      ...state.messages,
-    ]);
+    const response = await modelWithTools.invoke(
+      [
+        new SystemMessage(systemPromptWithDate),
+        ...state.messages,
+      ],
+      runConfig
+    );
     return { messages: [response] };
   }
 
@@ -242,7 +260,7 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
       }
       try {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const rawResult = await (matchingTool as any).invoke(tc.args);
+        const rawResult = await (matchingTool as any).invoke(tc.args, runConfig);
         results.push(
           new ToolMessage({ content: String(rawResult), tool_call_id: tc.id! })
         );
@@ -288,7 +306,10 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
   const checkpointer = await getCheckpointer();
   const app = graph.compile({ checkpointer });
 
-  const config = { configurable: { thread_id: sessionId } };
+  const runConfig: RunnableConfig = {
+    configurable: { thread_id: sessionId },
+    ...(langfuseHandler ? { callbacks: [langfuseHandler] } : {}),
+  };
 
   /** OpenAI-compatible APIs require every assistant tool_calls block to be followed by ToolMessages. */
   function messagesHaveUnresolvedToolCalls(messages: BaseMessage[] | undefined): boolean {
@@ -314,7 +335,7 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
     const MAX = 32;
     const checkpointer = await getCheckpointer();
     for (let i = 0; i < MAX; i++) {
-      const snap = await app.getState(config);
+      const snap = await app.getState(runConfig);
       const hasInterrupt = snap.tasks?.some((t) => (t.interrupts?.length ?? 0) > 0);
       const msgs = snap.values?.messages as BaseMessage[] | undefined;
       const orphanSequence = messagesHaveUnresolvedToolCalls(msgs);
@@ -322,7 +343,7 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
       if (!hasInterrupt && !orphanSequence) return;
 
       if (hasInterrupt) {
-        await app.invoke(new Command({ resume: "reject" }), config);
+        await app.invoke(new Command({ resume: "reject" }), runConfig);
         continue;
       }
 
@@ -337,7 +358,7 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
     // Resume interrupted graph with human decision
     finalState = await app.invoke(
       new Command({ resume: resumeDecision }),
-      config
+      runConfig
     );
   } else {
     await ensureGraphReadyForNewUserMessage();
@@ -354,7 +375,7 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
         userInput: message!,
         systemPrompt,
       },
-      config
+      runConfig
     );
   }
 
@@ -386,6 +407,20 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
       },
     });
 
+    await flushLangfuseTracing();
+    await recordLangfuseTrace({
+      name: "agent-run",
+      userId,
+      sessionId,
+      input: message ?? { resumeDecision },
+      output: interruptValue.message,
+      tags: [bypassConfirmation ? "unattended" : "interactive", "pending-confirmation"],
+      metadata: {
+        pendingConfirmation,
+        toolCalls: toolCallNames,
+      },
+    });
+
     return {
       response: interruptValue.message,
       toolCalls: toolCallNames,
@@ -401,6 +436,20 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
       : JSON.stringify(lastMessage.content);
 
   await addMessage(db, sessionId, "assistant", responseText);
+  await flushLangfuseTracing();
+  await recordLangfuseTrace({
+    name: "agent-run",
+    userId,
+    sessionId,
+    input: message ?? { resumeDecision },
+    output: responseText,
+    tags: [bypassConfirmation ? "unattended" : "interactive"],
+    metadata: {
+      toolCalls: toolCallNames,
+      enabledToolCount: enabledTools.filter((tool) => tool.enabled).length,
+      integrationProviders: integrations.map((integration) => integration.provider),
+    },
+  });
 
   return {
     response: responseText,

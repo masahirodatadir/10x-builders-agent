@@ -1,4 +1,5 @@
 import { AIMessage, HumanMessage, SystemMessage, ToolMessage, type BaseMessage } from "@langchain/core/messages";
+import type { RunnableConfig } from "@langchain/core/runnables";
 import { ChatOpenAI } from "@langchain/openai";
 import { mkdir, appendFile } from "node:fs/promises";
 import path from "node:path";
@@ -212,11 +213,17 @@ function createCompactionModel(): ChatOpenAI {
   });
 }
 
-async function summarizeMessages(messages: BaseMessage[]): Promise<string> {
-  const response = await createCompactionModel().invoke([
-    new SystemMessage(COMPACTION_SYSTEM_PROMPT),
-    new HumanMessage(serializeMessages(messages)),
-  ]);
+async function summarizeMessages(
+  messages: BaseMessage[],
+  config?: RunnableConfig
+): Promise<string> {
+  const response = await createCompactionModel().invoke(
+    [
+      new SystemMessage(COMPACTION_SYSTEM_PROMPT),
+      new HumanMessage(serializeMessages(messages)),
+    ],
+    config
+  );
   const summary = stripAnalysisBlocks(messageContentToString(response.content));
 
   if (!summary) {
@@ -226,7 +233,10 @@ async function summarizeMessages(messages: BaseMessage[]): Promise<string> {
   return summary;
 }
 
-export async function compactionNode(state: AgentGraphState): Promise<AgentGraphUpdate> {
+export async function compactionNode(
+  state: AgentGraphState,
+  config?: RunnableConfig
+): Promise<AgentGraphUpdate> {
   const {
     messages: microcompacted,
     changed,
@@ -278,7 +288,7 @@ export async function compactionNode(state: AgentGraphState): Promise<AgentGraph
   });
 
   try {
-    const summary = await summarizeMessages(messagesToSummarize);
+    const summary = await summarizeMessages(messagesToSummarize, config);
     const compactedMessages = [
       new SystemMessage(`Resumen compactado del historial anterior:\n\n${summary}`),
       ...recentMessages,

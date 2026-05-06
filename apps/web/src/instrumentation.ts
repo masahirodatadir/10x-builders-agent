@@ -1,13 +1,4 @@
-import * as Sentry from "@sentry/nextjs";
-
 export async function register() {
-  if (process.env.NEXT_RUNTIME === "nodejs") {
-    await import("./sentry.server.config");
-  }
-
-  if (process.env.NEXT_RUNTIME === "edge") {
-    await import("./sentry.edge.config");
-  }
+  // Intentionally empty in local development. Loading Sentry here causes
+  // Next's dev compiler to pull in heavy server instrumentation.
 }
-
-export const onRequestError = Sentry.captureRequestError;
